@@ -17,11 +17,17 @@ var cliCmd = &cobra.Command{
 	Long: `Launch the interactive Terminal User Interface (TUI) for Lucas.
 This provides a menu-driven interface for accessing various tools and utilities.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Set up logging based on debug flag
-		if debugFlag {
-			logger.SetLevel("debug")
+		// Set up logging based on debug or test flag
+		if debugFlag || testFlag {
+			logger.SetSilentMode(false) // Enable logging output
+			if debugFlag {
+				logger.SetLevel("debug")
+			}
+		} else {
+			logger.SetSilentMode(true) // Keep logging silent
 		}
 		
+		log := logger.New()
 		log.Info().
 			Bool("debug", debugFlag).
 			Bool("test", testFlag).

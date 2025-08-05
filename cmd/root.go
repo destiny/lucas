@@ -20,7 +20,10 @@ var rootCmd = &cobra.Command{
 It includes interactive TUI components and hub functionality for managing workflows.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		if verbose {
+			logger.SetSilentMode(false) // Enable logging output for verbose mode
 			logger.SetLevel("debug")
+		} else {
+			logger.SetSilentMode(true) // Keep logging silent by default
 		}
 	},
 }

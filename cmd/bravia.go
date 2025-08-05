@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"lucas/internal/bravia"
+	"lucas/internal/logger"
 )
 
 var (
@@ -29,6 +30,12 @@ var braviaRemoteCmd = &cobra.Command{
 Available codes: power, volume-up, volume-down, mute, home, etc.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Set up logging based on debug flag
+		if braviaDebug {
+			logger.SetSilentMode(false) // Enable logging output
+			logger.SetLevel("debug")
+		}
+		
 		client := bravia.NewBraviaClient(braviaHost, braviaCredential, braviaDebug)
 		
 		// Map string commands to remote codes
@@ -87,6 +94,12 @@ var braviaControlCmd = &cobra.Command{
 Available methods: power-status, volume-info, playing-content, etc.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Set up logging based on debug flag
+		if braviaDebug {
+			logger.SetSilentMode(false) // Enable logging output
+			logger.SetLevel("debug")
+		}
+		
 		client := bravia.NewBraviaClient(braviaHost, braviaCredential, braviaDebug)
 
 		// Map string commands to API methods and endpoints

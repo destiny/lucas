@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"io"
 	"os"
 	"time"
 
@@ -8,13 +9,27 @@ import (
 )
 
 var logger zerolog.Logger
+var silentMode bool
 
 func init() {
-	// Setup console writer for CLI-friendly output
-	output := zerolog.ConsoleWriter{
-		Out:        os.Stderr,
-		TimeFormat: time.RFC3339,
-		NoColor:    false,
+	// Default to silent mode (no output)
+	SetSilentMode(true)
+}
+
+// SetSilentMode configures whether logging should be silent or output to stderr
+func SetSilentMode(silent bool) {
+	silentMode = silent
+	
+	var output io.Writer
+	if silent {
+		output = io.Discard
+	} else {
+		// Setup console writer for CLI-friendly output
+		output = zerolog.ConsoleWriter{
+			Out:        os.Stderr,
+			TimeFormat: time.RFC3339,
+			NoColor:    false,
+		}
 	}
 	
 	logger = zerolog.New(output).With().Timestamp().Logger()
