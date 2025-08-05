@@ -28,7 +28,7 @@ go_binary(
 )
 
 go_binary(
-    name = "lucas_linux_arm64", 
+    name = "lucas_linux_arm64",
     embed = [":lucas_lib"],
     goarch = "arm64",
     goos = "linux",
@@ -38,7 +38,7 @@ go_binary(
 go_binary(
     name = "lucas_darwin_arm64",
     embed = [":lucas_lib"],
-    goarch = "arm64", 
+    goarch = "arm64",
     goos = "darwin",
     visibility = ["//visibility:public"],
 )

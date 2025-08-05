@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -15,19 +17,20 @@ import (
 // BraviaClient represents a client for Sony Bravia TV control
 type BraviaClient struct {
 	httpClient *http.Client
-	host       string
+	address    string
 	credential string
 	debug      bool
 	logger     zerolog.Logger
 }
 
 // NewBraviaClient creates a new Bravia client instance
-func NewBraviaClient(host string, credential string, debug bool) *BraviaClient {
+
+func NewBraviaClient(address string, credential string, debug bool) *BraviaClient {
 	client := &BraviaClient{
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		host:       host,
+		address:    address,
 		credential: credential,
 		debug:      debug,
 		logger:     logger.New(),
@@ -53,7 +56,7 @@ func (c *BraviaClient) RemoteRequest(code BraviaRemoteCode) error {
 </s:Envelope>`, string(code))
 
 	// Build URL
-	url := fmt.Sprintf("http://%s%s", c.host, IRCCEndpoint)
+	url := fmt.Sprintf("http://%s%s", c.address, IRCCEndpoint)
 
 	// Create request
 	req, err := http.NewRequest("POST", url, bytes.NewBufferString(soapBody))
@@ -63,39 +66,29 @@ func (c *BraviaClient) RemoteRequest(code BraviaRemoteCode) error {
 
 	// Set headers
 	req.Header.Set("Content-Type", "text/xml; charset=utf-8")
-	req.Header.Set("SOAPAction", "urn:schemas-sony-com:service:IRCC:1#X_SendIRCC")
+	req.Header.Set("SOAPAction", "\"urn:schemas-sony-com:service:IRCC:1#X_SendIRCC\"")
 	req.Header.Set("X-Auth-PSK", c.credential)
 
-	if c.debug {
-		c.logger.Debug().
-			Str("url", url).
-			Str("code", string(code)).
-			Msg("Sending IRCC remote request")
-	}
+	// Log complete HTTP request if debug is enabled
+	c.logHTTPRequest(req)
 
-	// Send request
+	// Send request and measure duration
+	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)
+	duration := time.Since(startTime)
+	
 	if err != nil {
 		return fmt.Errorf("failed to send IRCC request: %w", err)
 	}
 	defer resp.Body.Close()
 
+	// Log complete HTTP response if debug is enabled
+	c.logHTTPResponse(resp, duration)
+
 	// Check response status
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		if c.debug {
-			c.logger.Error().
-				Int("status", resp.StatusCode).
-				Str("body", string(body)).
-				Msg("IRCC request failed")
-		}
 		return fmt.Errorf("IRCC request failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	if c.debug {
-		c.logger.Debug().
-			Int("status", resp.StatusCode).
-			Msg("IRCC request successful")
 	}
 
 	return nil
@@ -110,7 +103,7 @@ func (c *BraviaClient) ControlRequest(endpoint BraviaEndpoint, payload BraviaPay
 	}
 
 	// Build URL
-	url := fmt.Sprintf("http://%s%s", c.host, string(endpoint))
+	url := fmt.Sprintf("http://%s%s", c.address, string(endpoint))
 
 	// Create request
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
@@ -122,27 +115,20 @@ func (c *BraviaClient) ControlRequest(endpoint BraviaEndpoint, payload BraviaPay
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Auth-PSK", c.credential)
 
-	if c.debug {
-		c.logger.Debug().
-			Str("url", url).
-			Str("endpoint", string(endpoint)).
-			Str("method", payload.Method).
-			Str("payload", string(jsonData)).
-			Msg("Sending control API request")
-	}
+	// Log complete HTTP request if debug is enabled
+	c.logHTTPRequest(req)
 
-	// Send request
+	// Send request and measure duration
+	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)
+	duration := time.Since(startTime)
+	
 	if err != nil {
 		return nil, fmt.Errorf("failed to send control request: %w", err)
 	}
 
-	if c.debug {
-		c.logger.Debug().
-			Int("status", resp.StatusCode).
-			Str("method", payload.Method).
-			Msg("Control API request completed")
-	}
+	// Log complete HTTP response if debug is enabled
+	c.logHTTPResponse(resp, duration)
 
 	return resp, nil
 }
@@ -152,11 +138,54 @@ func CreatePayload(id int, method BraviaMethod, params []map[string]string) Brav
 	if params == nil {
 		params = []map[string]string{}
 	}
-	
+
 	return BraviaPayload{
 		ID:      id,
 		Version: "1.0",
 		Method:  string(method),
 		Params:  params,
 	}
+}
+
+// logHTTPRequest logs the complete HTTP request details when debug is enabled
+func (c *BraviaClient) logHTTPRequest(req *http.Request) {
+	if !c.debug {
+		return
+	}
+
+	// Use httputil.DumpRequest to get complete request details
+	reqDump, err := httputil.DumpRequest(req, true)
+	if err != nil {
+		c.logger.Error().Err(err).Msg("Failed to dump HTTP request")
+		return
+	}
+
+	// Mask sensitive credential in the dump
+	reqDumpStr := string(reqDump)
+	if c.credential != "" {
+		reqDumpStr = strings.ReplaceAll(reqDumpStr, c.credential, "****")
+	}
+
+	c.logger.Debug().
+		Str("http_request", reqDumpStr).
+		Msg("Bravia HTTP Request")
+}
+
+// logHTTPResponse logs the complete HTTP response details when debug is enabled
+func (c *BraviaClient) logHTTPResponse(resp *http.Response, duration time.Duration) {
+	if !c.debug {
+		return
+	}
+
+	// Use httputil.DumpResponse to get complete response details
+	respDump, err := httputil.DumpResponse(resp, true)
+	if err != nil {
+		c.logger.Error().Err(err).Msg("Failed to dump HTTP response")
+		return
+	}
+
+	c.logger.Debug().
+		Str("http_response", string(respDump)).
+		Dur("duration", duration).
+		Msg("Bravia HTTP Response")
 }

@@ -5,8 +5,5 @@ go_library(
     srcs = ["logger.go"],
     importpath = "lucas/internal/logger",
     visibility = ["//visibility:public"],
-    deps = [
-        "@com_github_rs_zerolog//:zerolog",
-        "@com_github_rs_zerolog//log",
-    ],
+    deps = ["@com_github_rs_zerolog//:zerolog"],
 )

@@ -1,0 +1,11 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+go_test(
+    name = "bravia_test",
+    srcs = ["client_test.go"],
+    deps = [
+        "//internal/bravia:bravia",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -5,7 +5,7 @@ go_library(
     srcs = [
         "bravia.go",
         "cli.go",
-        "hub.go", 
+        "hub.go",
         "root.go",
     ],
     importpath = "lucas/cmd",
