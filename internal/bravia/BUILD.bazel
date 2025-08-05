@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "bravia",
+    srcs = [
+        "client.go",
+        "constants.go", 
+        "types.go",
+    ],
+    importpath = "lucas/internal/bravia",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/logger",
+        "@com_github_rs_zerolog//:zerolog",
+    ],
+)

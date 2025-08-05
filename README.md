@@ -6,6 +6,7 @@ A powerful Go-based command-line application with interactive TUI features and c
 
 - **Interactive CLI**: Beautiful terminal user interface powered by Bubble Tea
 - **Hub Functionality**: Centralized management and coordination features
+- **Sony Bravia Control**: Remote control and API integration for Sony Bravia TVs
 - **Cross-Platform**: Builds for Linux (AMD64/ARM64) and macOS (ARM64)
 - **Modern Architecture**: Built with Cobra CLI framework and Bazel build system
 - **Structured Logging**: Console-friendly logging with Zerolog
@@ -16,10 +17,12 @@ A powerful Go-based command-line application with interactive TUI features and c
 lucas/
 ├── cmd/                    # Command definitions
 │   ├── cli/               # Interactive TUI components
+│   ├── bravia.go         # Sony Bravia TV control
 │   ├── cli.go            # CLI subcommand
 │   ├── hub.go            # Hub subcommand  
 │   └── root.go           # Root command & shared logic
 ├── internal/
+│   ├── bravia/           # Sony Bravia TV client
 │   └── logger/           # Logging utilities
 ├── BUILD.bazel           # Bazel build configuration
 ├── MODULE.bazel          # Bazel module dependencies
@@ -43,6 +46,10 @@ lucas/
 
 # Enable verbose logging
 ./lucas -v cli
+
+# Sony Bravia TV Control
+./lucas bravia remote power --host 192.168.1.100:80 --credential 0000
+./lucas bravia control power-status --host 192.168.1.100:80 --credential 0000
 ```
 
 ### Interactive CLI Features
@@ -53,6 +60,38 @@ The `lucas cli` command launches a beautiful TUI with the following options:
 - Process Monitor  
 - Log Viewer
 - Configuration Editor
+
+### Sony Bravia TV Control
+
+Control Sony Bravia TVs using IRCC remote commands and JSON API:
+
+```bash
+# List available remote control codes
+./lucas bravia list remote
+
+# Send remote control commands
+./lucas bravia remote power --host 192.168.1.100:80 --credential 0000
+./lucas bravia remote volume-up --host 192.168.1.100:80 --credential 0000
+./lucas bravia remote hdmi1 --host 192.168.1.100:80 --credential 0000
+
+# List available control API methods  
+./lucas bravia list control
+
+# Send control API commands
+./lucas bravia control power-status --host 192.168.1.100:80 --credential 0000
+./lucas bravia control volume-info --host 192.168.1.100:80 --credential 0000
+./lucas bravia control system-info --host 192.168.1.100:80 --credential 0000
+
+# Enable debug logging for troubleshooting
+./lucas bravia remote power --host 192.168.1.100:80 --credential 0000 --debug
+```
+
+**Supported Features:**
+- **Remote Control**: Power, volume, channels, navigation, input switching
+- **System Control**: Power status, volume info, system information
+- **Content Management**: Playing content info, app list, content list
+- **Authentication**: PSK (Pre-Shared Key) support
+- **Debug Mode**: Request/response logging for troubleshooting
 
 ## Building
 
