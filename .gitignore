@@ -1,11 +1,8 @@
 # Binaries for programs and plugins
-*.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-lucas
-lucas-*
 
 # Test binary, built with `go test -c`
 *.test
@@ -20,13 +17,10 @@ lucas-*
 go.work
 go.work.sum
 
-# Bazel build outputs
-bazel-*
-.bazel
-
-# Bazel cache and temporary files
-.bazelrc.user
-.bazelversion
+# Go build artifacts
+lucas
+lucas-*
+*.exe
 
 # IDE and editor files
 .vscode/

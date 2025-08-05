@@ -1,4 +1,4 @@
-package bravia
+package device
 
 import (
 	"encoding/json"
@@ -9,16 +9,16 @@ import (
 type Device interface {
 	// Process handles a JSON-encoded action and executes the corresponding operation
 	Process(actionJSON []byte) (*ActionResponse, error)
-	
+
 	// GetDeviceInfo returns basic information about the device
 	GetDeviceInfo() DeviceInfo
 }
 
 // DeviceInfo contains basic information about a device
 type DeviceInfo struct {
-	Type         string `json:"type"`
-	Model        string `json:"model"`
-	Address      string `json:"address"`
+	Type         string   `json:"type"`
+	Model        string   `json:"model"`
+	Address      string   `json:"address"`
 	Capabilities []string `json:"capabilities"`
 }
 
@@ -75,81 +75,15 @@ const (
 type ControlAction string
 
 const (
-	ControlActionPowerStatus     ControlAction = "power_status"
-	ControlActionSystemInfo      ControlAction = "system_info"
-	ControlActionVolumeInfo      ControlAction = "volume_info"
-	ControlActionPlayingContent  ControlAction = "playing_content"
-	ControlActionAppList         ControlAction = "app_list"
-	ControlActionContentList     ControlAction = "content_list"
-	ControlActionSetVolume       ControlAction = "set_volume"
-	ControlActionSetMute         ControlAction = "set_mute"
+	ControlActionPowerStatus    ControlAction = "power_status"
+	ControlActionSystemInfo     ControlAction = "system_info"
+	ControlActionVolumeInfo     ControlAction = "volume_info"
+	ControlActionPlayingContent ControlAction = "playing_content"
+	ControlActionAppList        ControlAction = "app_list"
+	ControlActionContentList    ControlAction = "content_list"
+	ControlActionSetVolume      ControlAction = "set_volume"
+	ControlActionSetMute        ControlAction = "set_mute"
 )
-
-// remoteActionMap maps RemoteAction to BraviaRemoteCode
-var remoteActionMap = map[RemoteAction]BraviaRemoteCode{
-	RemoteActionPower:       PowerButton,
-	RemoteActionPowerOn:     PowerOn,
-	RemoteActionPowerOff:    PowerOff,
-	RemoteActionVolumeUp:    VolumeUp,
-	RemoteActionVolumeDown:  VolumeDown,
-	RemoteActionMute:        Mute,
-	RemoteActionChannelUp:   ChannelUp,
-	RemoteActionChannelDown: ChannelDown,
-	RemoteActionUp:          Up,
-	RemoteActionDown:        Down,
-	RemoteActionLeft:        Left,
-	RemoteActionRight:       Right,
-	RemoteActionConfirm:     Confirm,
-	RemoteActionHome:        Home,
-	RemoteActionMenu:        Menu,
-	RemoteActionBack:        Back,
-	RemoteActionInput:       Input,
-	RemoteActionHDMI1:       HDMI1,
-	RemoteActionHDMI2:       HDMI2,
-	RemoteActionHDMI3:       HDMI3,
-	RemoteActionHDMI4:       HDMI4,
-}
-
-// controlActionMap maps ControlAction to endpoint and method
-type controlActionInfo struct {
-	endpoint BraviaEndpoint
-	method   BraviaMethod
-}
-
-var controlActionMap = map[ControlAction]controlActionInfo{
-	ControlActionPowerStatus: {
-		endpoint: SystemEndpoint,
-		method:   GetPowerStatus,
-	},
-	ControlActionSystemInfo: {
-		endpoint: SystemEndpoint,
-		method:   GetSystemInformation,
-	},
-	ControlActionVolumeInfo: {
-		endpoint: AudioEndpoint,
-		method:   GetVolumeInformation,
-	},
-	ControlActionPlayingContent: {
-		endpoint: AVContentEndpoint,
-		method:   GetPlayingContentInfo,
-	},
-	ControlActionAppList: {
-		endpoint: AppControlEndpoint,
-		method:   GetApplicationList,
-	},
-	ControlActionContentList: {
-		endpoint: AVContentEndpoint,
-		method:   GetContentList,
-	},
-	ControlActionSetVolume: {
-		endpoint: AudioEndpoint,
-		method:   SetAudioVolume,
-	},
-	ControlActionSetMute: {
-		endpoint: AudioEndpoint,
-		method:   SetAudioMute,
-	},
-}
 
 // parseActionRequest parses JSON input into ActionRequest
 func parseActionRequest(actionJSON []byte) (*ActionRequest, error) {
@@ -157,15 +91,15 @@ func parseActionRequest(actionJSON []byte) (*ActionRequest, error) {
 	if err := json.Unmarshal(actionJSON, &request); err != nil {
 		return nil, fmt.Errorf("failed to parse action request: %w", err)
 	}
-	
+
 	// Validate required fields
 	if request.Type == "" {
 		return nil, fmt.Errorf("action type is required")
 	}
-	
+
 	if request.Action == "" {
 		return nil, fmt.Errorf("action is required")
 	}
-	
+
 	return &request, nil
 }

@@ -4,22 +4,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"lucas/internal/device"
 	"strconv"
 )
 
 // BraviaRemote implements the Device interface for Sony Bravia TVs
 type BraviaRemote struct {
 	client *BraviaClient
-	info   DeviceInfo
+	info   device.DeviceInfo
 }
 
 // NewBraviaRemote creates a new BraviaRemote device
 func NewBraviaRemote(address, credential string, debug bool) *BraviaRemote {
 	client := NewBraviaClient(address, credential, debug)
-	
+
 	return &BraviaRemote{
 		client: client,
-		info: DeviceInfo{
+		info: device.DeviceInfo{
 			Type:    "bravia_tv",
 			Model:   "Sony Bravia",
 			Address: address,
@@ -35,16 +36,16 @@ func NewBraviaRemote(address, credential string, debug bool) *BraviaRemote {
 }
 
 // GetDeviceInfo returns information about this Bravia device
-func (br *BraviaRemote) GetDeviceInfo() DeviceInfo {
+func (br *BraviaRemote) GetDeviceInfo() device.DeviceInfo {
 	return br.info
 }
 
 // Process handles JSON action requests and routes them to appropriate methods
-func (br *BraviaRemote) Process(actionJSON []byte) (*ActionResponse, error) {
+func (br *BraviaRemote) Process(actionJSON []byte) (*device.ActionResponse, error) {
 	// Parse the action request
 	request, err := parseActionRequest(actionJSON)
 	if err != nil {
-		return &ActionResponse{
+		return &device.ActionResponse{
 			Success: false,
 			Error:   err.Error(),
 		}, nil
@@ -52,12 +53,12 @@ func (br *BraviaRemote) Process(actionJSON []byte) (*ActionResponse, error) {
 
 	// Route based on action type
 	switch request.Type {
-	case ActionTypeRemote:
+	case device.ActionTypeRemote:
 		return br.processRemoteAction(request)
-	case ActionTypeControl:
+	case device.ActionTypeControl:
 		return br.processControlAction(request)
 	default:
-		return &ActionResponse{
+		return &device.ActionResponse{
 			Success: false,
 			Error:   fmt.Sprintf("unsupported action type: %s", request.Type),
 		}, nil
@@ -65,14 +66,14 @@ func (br *BraviaRemote) Process(actionJSON []byte) (*ActionResponse, error) {
 }
 
 // processRemoteAction handles remote control actions
-func (br *BraviaRemote) processRemoteAction(request *ActionRequest) (*ActionResponse, error) {
+func (br *BraviaRemote) processRemoteAction(request *device.ActionRequest) (*device.ActionResponse, error) {
 	// Convert action string to RemoteAction
-	remoteAction := RemoteAction(request.Action)
-	
+	remoteAction := device.RemoteAction(request.Action)
+
 	// Look up the corresponding BraviaRemoteCode
 	code, exists := remoteActionMap[remoteAction]
 	if !exists {
-		return &ActionResponse{
+		return &device.ActionResponse{
 			Success: false,
 			Error:   fmt.Sprintf("unsupported remote action: %s", request.Action),
 		}, nil
@@ -81,27 +82,27 @@ func (br *BraviaRemote) processRemoteAction(request *ActionRequest) (*ActionResp
 	// Execute the remote request
 	err := br.client.RemoteRequest(code)
 	if err != nil {
-		return &ActionResponse{
+		return &device.ActionResponse{
 			Success: false,
 			Error:   fmt.Sprintf("remote request failed: %v", err),
 		}, nil
 	}
 
-	return &ActionResponse{
+	return &device.ActionResponse{
 		Success: true,
 		Data:    fmt.Sprintf("Remote action '%s' executed successfully", request.Action),
 	}, nil
 }
 
 // processControlAction handles API control actions
-func (br *BraviaRemote) processControlAction(request *ActionRequest) (*ActionResponse, error) {
+func (br *BraviaRemote) processControlAction(request *device.ActionRequest) (*device.ActionResponse, error) {
 	// Convert action string to ControlAction
-	controlAction := ControlAction(request.Action)
-	
+	controlAction := device.ControlAction(request.Action)
+
 	// Look up the corresponding endpoint and method
 	actionInfo, exists := controlActionMap[controlAction]
 	if !exists {
-		return &ActionResponse{
+		return &device.ActionResponse{
 			Success: false,
 			Error:   fmt.Sprintf("unsupported control action: %s", request.Action),
 		}, nil
@@ -110,7 +111,7 @@ func (br *BraviaRemote) processControlAction(request *ActionRequest) (*ActionRes
 	// Create payload with parameters
 	params, err := br.buildControlParameters(controlAction, request.Parameters)
 	if err != nil {
-		return &ActionResponse{
+		return &device.ActionResponse{
 			Success: false,
 			Error:   fmt.Sprintf("invalid parameters: %v", err),
 		}, nil
@@ -121,7 +122,7 @@ func (br *BraviaRemote) processControlAction(request *ActionRequest) (*ActionRes
 	// Execute the control request
 	resp, err := br.client.ControlRequest(actionInfo.endpoint, payload)
 	if err != nil {
-		return &ActionResponse{
+		return &device.ActionResponse{
 			Success: false,
 			Error:   fmt.Sprintf("control request failed: %v", err),
 		}, nil
@@ -131,7 +132,7 @@ func (br *BraviaRemote) processControlAction(request *ActionRequest) (*ActionRes
 	// Read and parse response
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return &ActionResponse{
+		return &device.ActionResponse{
 			Success: false,
 			Error:   fmt.Sprintf("failed to read response: %v", err),
 		}, nil
@@ -141,24 +142,24 @@ func (br *BraviaRemote) processControlAction(request *ActionRequest) (*ActionRes
 	var responseData interface{}
 	if err := json.Unmarshal(responseBody, &responseData); err != nil {
 		// If JSON parsing fails, return raw response
-		return &ActionResponse{
+		return &device.ActionResponse{
 			Success: true,
 			Data:    string(responseBody),
 		}, nil
 	}
 
-	return &ActionResponse{
+	return &device.ActionResponse{
 		Success: true,
 		Data:    responseData,
 	}, nil
 }
 
 // buildControlParameters builds parameters for control actions
-func (br *BraviaRemote) buildControlParameters(action ControlAction, requestParams map[string]interface{}) ([]map[string]string, error) {
+func (br *BraviaRemote) buildControlParameters(action device.ControlAction, requestParams map[string]interface{}) ([]map[string]string, error) {
 	params := []map[string]string{}
 
 	switch action {
-	case ControlActionSetVolume:
+	case device.ControlActionSetVolume:
 		// Volume setting requires a volume parameter
 		if requestParams != nil {
 			if volume, exists := requestParams["volume"]; exists {
@@ -174,7 +175,7 @@ func (br *BraviaRemote) buildControlParameters(action ControlAction, requestPara
 				default:
 					return nil, fmt.Errorf("invalid volume parameter type")
 				}
-				
+
 				params = append(params, map[string]string{
 					"target": "speaker",
 					"volume": volumeStr,
@@ -186,7 +187,7 @@ func (br *BraviaRemote) buildControlParameters(action ControlAction, requestPara
 			return nil, fmt.Errorf("parameters are required for set_volume action")
 		}
 
-	case ControlActionSetMute:
+	case device.ControlActionSetMute:
 		// Mute setting requires a status parameter
 		if requestParams != nil {
 			if status, exists := requestParams["status"]; exists {
@@ -204,7 +205,7 @@ func (br *BraviaRemote) buildControlParameters(action ControlAction, requestPara
 				default:
 					return nil, fmt.Errorf("invalid status parameter type")
 				}
-				
+
 				params = append(params, map[string]string{
 					"status": statusStr,
 				})
@@ -241,4 +242,90 @@ func (br *BraviaRemote) buildControlParameters(action ControlAction, requestPara
 	}
 
 	return params, nil
+}
+
+// parseActionRequest parses JSON input into ActionRequest
+func parseActionRequest(actionJSON []byte) (*device.ActionRequest, error) {
+	var request device.ActionRequest
+	if err := json.Unmarshal(actionJSON, &request); err != nil {
+		return nil, fmt.Errorf("failed to parse action request: %w", err)
+	}
+	
+	// Validate required fields
+	if request.Type == "" {
+		return nil, fmt.Errorf("action type is required")
+	}
+	
+	if request.Action == "" {
+		return nil, fmt.Errorf("action is required")
+	}
+	
+	return &request, nil
+}
+
+
+// remoteActionMap maps RemoteAction to BraviaRemoteCode
+var remoteActionMap = map[device.RemoteAction]BraviaRemoteCode{
+	device.RemoteActionPower:       PowerButton,
+	device.RemoteActionPowerOn:     PowerOn,
+	device.RemoteActionPowerOff:    PowerOff,
+	device.RemoteActionVolumeUp:    VolumeUp,
+	device.RemoteActionVolumeDown:  VolumeDown,
+	device.RemoteActionMute:        Mute,
+	device.RemoteActionChannelUp:   ChannelUp,
+	device.RemoteActionChannelDown: ChannelDown,
+	device.RemoteActionUp:          Up,
+	device.RemoteActionDown:        Down,
+	device.RemoteActionLeft:        Left,
+	device.RemoteActionRight:       Right,
+	device.RemoteActionConfirm:     Confirm,
+	device.RemoteActionHome:        Home,
+	device.RemoteActionMenu:        Menu,
+	device.RemoteActionBack:        Back,
+	device.RemoteActionInput:       Input,
+	device.RemoteActionHDMI1:       HDMI1,
+	device.RemoteActionHDMI2:       HDMI2,
+	device.RemoteActionHDMI3:       HDMI3,
+	device.RemoteActionHDMI4:       HDMI4,
+}
+
+// controlActionMap maps ControlAction to endpoint and method
+type controlActionInfo struct {
+	endpoint BraviaEndpoint
+	method   BraviaMethod
+}
+
+var controlActionMap = map[device.ControlAction]controlActionInfo{
+	device.ControlActionPowerStatus: {
+		endpoint: SystemEndpoint,
+		method:   GetPowerStatus,
+	},
+	device.ControlActionSystemInfo: {
+		endpoint: SystemEndpoint,
+		method:   GetSystemInformation,
+	},
+	device.ControlActionVolumeInfo: {
+		endpoint: AudioEndpoint,
+		method:   GetVolumeInformation,
+	},
+	device.ControlActionPlayingContent: {
+		endpoint: AVContentEndpoint,
+		method:   GetPlayingContentInfo,
+	},
+	device.ControlActionAppList: {
+		endpoint: AppControlEndpoint,
+		method:   GetApplicationList,
+	},
+	device.ControlActionContentList: {
+		endpoint: AVContentEndpoint,
+		method:   GetContentList,
+	},
+	device.ControlActionSetVolume: {
+		endpoint: AudioEndpoint,
+		method:   SetAudioVolume,
+	},
+	device.ControlActionSetMute: {
+		endpoint: AudioEndpoint,
+		method:   SetAudioMute,
+	},
 }

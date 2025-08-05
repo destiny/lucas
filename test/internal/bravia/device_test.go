@@ -2,6 +2,7 @@ package bravia_test
 
 import (
 	"encoding/json"
+	"lucas/internal/device"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,9 +16,9 @@ import (
 func TestNewBraviaRemote(t *testing.T) {
 	t.Run("creates BraviaRemote with proper device info", func(t *testing.T) {
 		remote := bravia.NewBraviaRemote("192.168.1.100:80", "test-psk", false)
-		
+
 		assert.NotNil(t, remote)
-		
+
 		info := remote.GetDeviceInfo()
 		assert.Equal(t, "bravia_tv", info.Type)
 		assert.Equal(t, "Sony Bravia", info.Model)
@@ -145,11 +146,11 @@ func TestBraviaRemote_Process_ControlActions(t *testing.T) {
 	t.Run("processes set volume action with parameters", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "/sony/audio", r.URL.Path)
-			
+
 			// Verify the request body contains volume parameter
 			var payload bravia.BraviaPayload
 			json.NewDecoder(r.Body).Decode(&payload)
-			
+
 			assert.Equal(t, "setAudioVolume", payload.Method)
 			assert.Len(t, payload.Params, 1)
 			assert.Equal(t, "50", payload.Params[0]["volume"])
@@ -261,11 +262,11 @@ func TestBraviaRemote_Process_ErrorHandling(t *testing.T) {
 func TestBraviaRemote_DeviceInterface(t *testing.T) {
 	t.Run("implements Device interface", func(t *testing.T) {
 		remote := bravia.NewBraviaRemote("localhost:80", "test", false)
-		
+
 		// Test that BraviaRemote implements Device interface
-		var device bravia.Device = remote
+		var device device.Device = remote
 		assert.NotNil(t, device)
-		
+
 		// Test DeviceInfo
 		info := device.GetDeviceInfo()
 		assert.Equal(t, "bravia_tv", info.Type)
