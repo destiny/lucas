@@ -85,16 +85,16 @@ func (m SetupModel) Update(msg tea.Msg) (SetupModel, tea.Cmd) {
 			}
 			return m, nil
 
-		case "up", "k":
+		case "up":
 			return m.handleUp(), nil
 
-		case "down", "j":
+		case "down":
 			return m.handleDown(), nil
 
-		case "left", "h":
+		case "left":
 			return m.handleLeft(), nil
 
-		case "right", "l":
+		case "right":
 			return m.handleRight(), nil
 
 		case "backspace":
@@ -166,8 +166,8 @@ func (m SetupModel) View() string {
 	if showCredCursor {
 		credStyle = inputFocusedStyle
 	}
-	maskedCredential := strings.Repeat("*", len(m.credential))
-	credText := renderTextWithCursor(maskedCredential, m.credentialCursor, showCredCursor)
+	//maskedCredential := strings.Repeat("*", len(m.credential))
+	credText := renderTextWithCursor(m.credential, m.credentialCursor, showCredCursor)
 	b.WriteString(credStyle.Render(credText))
 	b.WriteString("\n\n")
 
@@ -253,7 +253,7 @@ func (m SetupModel) handleConnect() (SetupModel, tea.Cmd) {
 
 	// Use address as provided by user (no normalization)
 	// Let the HTTP client handle default ports naturally
-	
+
 	// Create device connection with debug and test flags
 	device := bravia.NewBraviaRemoteWithFlags(m.hostAddress, m.credential, m.debugMode, m.testMode)
 
@@ -385,7 +385,7 @@ func (m SetupModel) handlePaste() SetupModel {
 	switch m.focusedField {
 	case setupFieldHostAddress:
 		if m.hostAddress == "" {
-			pasteText = "192.168.1.100"  // Simple IP without port
+			pasteText = "192.168.1.100" // Simple IP without port
 		}
 	case setupFieldCredential:
 		// Don't auto-paste credentials for security
@@ -479,7 +479,6 @@ func (m SetupModel) IsValidHostAddress(address string) bool {
 
 	return true
 }
-
 
 // IsConnected returns true if device is connected
 func (m SetupModel) IsConnected() bool {
