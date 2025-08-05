@@ -147,7 +147,7 @@ func (m SetupModel) View() string {
 	b.WriteString("\n")
 
 	// Host Address Input
-	b.WriteString(subtitleStyle.Render("Host Address (IP:Port):"))
+	b.WriteString(subtitleStyle.Render("Host Address (IP or IP:Port):"))
 	b.WriteString("\n")
 	hostStyle := inputStyle
 	showCursor := m.focusedField == setupFieldHostAddress
@@ -243,14 +243,17 @@ func (m SetupModel) handleConnect() (SetupModel, tea.Cmd) {
 	}
 
 	// Validate host address format
-	if !m.isValidHostAddress(m.hostAddress) {
-		m.connectionError = "Invalid host address format (expected IP:port)"
+	if !m.IsValidHostAddress(m.hostAddress) {
+		m.connectionError = "Invalid host address format"
 		return m, nil
 	}
 
 	m.connecting = true
 	m.connectionError = ""
 
+	// Use address as provided by user (no normalization)
+	// Let the HTTP client handle default ports naturally
+	
 	// Create device connection with debug and test flags
 	device := bravia.NewBraviaRemoteWithFlags(m.hostAddress, m.credential, m.debugMode, m.testMode)
 
@@ -266,7 +269,7 @@ func (m SetupModel) handleConnect() (SetupModel, tea.Cmd) {
 	log.Info().
 		Str("device_type", deviceInfo.Type).
 		Str("device_model", deviceInfo.Model).
-		Str("address", deviceInfo.Address).
+		Str("address", m.hostAddress).
 		Msg("Device connected successfully")
 
 	return m, nil
@@ -382,7 +385,7 @@ func (m SetupModel) handlePaste() SetupModel {
 	switch m.focusedField {
 	case setupFieldHostAddress:
 		if m.hostAddress == "" {
-			pasteText = "192.168.1.100:80"
+			pasteText = "192.168.1.100"  // Simple IP without port
 		}
 	case setupFieldCredential:
 		// Don't auto-paste credentials for security
@@ -447,15 +450,17 @@ func (m *SetupModel) syncCursorPosition() {
 	}
 }
 
-// isValidHostAddress validates the host address format
-func (m SetupModel) isValidHostAddress(address string) bool {
-	// Check for IP:port format
+// IsValidHostAddress validates the host address format (with optional port)
+func (m SetupModel) IsValidHostAddress(address string) bool {
+	// Try to split host:port first
 	host, portStr, err := net.SplitHostPort(address)
 	if err != nil {
-		return false
+		// If split fails, treat the whole address as host (no port specified)
+		host = address
+		portStr = ""
 	}
 
-	// Validate IP
+	// Validate host (IP or hostname)
 	if net.ParseIP(host) == nil {
 		// Try as hostname
 		matched, _ := regexp.MatchString(`^[a-zA-Z0-9.-]+$`, host)
@@ -464,14 +469,17 @@ func (m SetupModel) isValidHostAddress(address string) bool {
 		}
 	}
 
-	// Validate port
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port < 1 || port > 65535 {
-		return false
+	// Validate port if provided
+	if portStr != "" {
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port < 1 || port > 65535 {
+			return false
+		}
 	}
 
 	return true
 }
+
 
 // IsConnected returns true if device is connected
 func (m SetupModel) IsConnected() bool {

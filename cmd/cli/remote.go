@@ -12,6 +12,14 @@ import (
 	"lucas/internal/logger"
 )
 
+// LogEntry represents a log entry for display
+type LogEntry struct {
+	Timestamp time.Time
+	Level     string // INF, DBG, ERR
+	Message   string
+	Action    string // button name or action
+}
+
 // RemoteModel handles the remote control screen
 type RemoteModel struct {
 	// Connected device
@@ -33,6 +41,10 @@ type RemoteModel struct {
 	// Screen dimensions for responsive layout
 	width  int
 	height int
+
+	// Log display
+	logBuffer   []LogEntry
+	maxLogLines int
 }
 
 // NewRemoteModel creates a new remote control screen model
@@ -48,6 +60,8 @@ func NewRemoteModelWithFlags(dev device.Device, info device.DeviceInfo, debug, t
 		actionHistory: []actionHistoryEntry{},
 		debugMode:     debug,
 		testMode:      test,
+		logBuffer:     []LogEntry{},
+		maxLogLines:   6, // Show last 6 log entries
 	}
 }
 
@@ -120,49 +134,42 @@ func (m RemoteModel) Update(msg tea.Msg) (RemoteModel, tea.Cmd) {
 
 // View renders the remote control screen
 func (m RemoteModel) View() string {
-	// Use lipgloss to create a centered, responsive layout
-	var content strings.Builder
+	var sections []string
 
 	// Header
-	header := titleStyle.Render("Lucas CLI - TV Remote Control")
-	content.WriteString(header)
-	content.WriteString("\n\n")
+	sections = append(sections, titleStyle.Render("Lucas CLI - TV Remote Control"))
 
-	// Device Info
-	deviceInfo := successStyle.Render("📺 " + m.deviceInfo.Model + " Connected")
+	// Device Info (compact single line)
+	deviceInfo := successStyle.Render("📺 " + m.deviceInfo.Model)
 	if m.testMode {
-		deviceInfo += " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#FFB86C")).Render("(Test Mode)")
+		deviceInfo += " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#FFB86C")).Render("(Test)")
 	}
-	content.WriteString(deviceInfo)
-	content.WriteString("\n")
-	content.WriteString(fmt.Sprintf("Address: %s", m.deviceInfo.Address))
-	content.WriteString("\n\n")
+	sections = append(sections, deviceInfo)
 
-	// Remote Control Layout (responsive)
-	remoteLayout := m.renderResponsiveRemoteLayout()
-	content.WriteString(remoteLayout)
+	// Remote Control Layout
+	sections = append(sections, m.renderHorizontalRemoteLayout())
 
-	// Status Bar
-	statusBar := m.renderStatusBar()
-	content.WriteString(statusBar)
+	// Status (if recent action)
+	if m.lastResponse != nil {
+		sections = append(sections, m.renderStatusBar())
+	}
+
+	// Fixed 3-line Log Display (if debug or test mode)
+	if (m.debugMode || m.testMode) {
+		logDisplay := m.renderLogDisplay()
+		if logDisplay != "" {
+			sections = append(sections, logDisplay)
+		}
+	}
 
 	// Help Text
-	helpText := m.renderHelpText()
-	content.WriteString(helpText)
+	sections = append(sections, m.renderHelpText())
 
-	// Center content if terminal is wide enough
-	if m.width > 80 {
-		return lipgloss.NewStyle().
-			Width(m.width).
-			Align(lipgloss.Center).
-			Render(content.String())
-	}
-
-	return content.String()
+	return strings.Join(sections, "\n\n")
 }
 
-// renderResponsiveRemoteLayout creates a responsive remote control layout
-func (m RemoteModel) renderResponsiveRemoteLayout() string {
+// renderHorizontalRemoteLayout creates a horizontal remote control layout
+func (m RemoteModel) renderHorizontalRemoteLayout() string {
 	getButtonStyle := func(btn remoteButton) lipgloss.Style {
 		base := remoteButtonStyle
 		if m.selectedButton == btn && time.Since(m.lastButtonPress) < 200*time.Millisecond {
@@ -171,104 +178,79 @@ func (m RemoteModel) renderResponsiveRemoteLayout() string {
 		return base
 	}
 
-	// Create button grid using lipgloss
-	powerRow := lipgloss.JoinHorizontal(lipgloss.Center,
-		getButtonStyle(buttonPower).Render(" PWR "),
+	// Left column: Power & Navigation (all buttons 6 chars wide)
+	navColumn := lipgloss.JoinVertical(lipgloss.Center,
+		getButtonStyle(buttonPower).Render(" PWR  "),
+		"",
+		getButtonStyle(buttonUp).Render("  ↑   "),
+		lipgloss.JoinHorizontal(lipgloss.Center,
+			getButtonStyle(buttonLeft).Render("  ←   "),
+			getButtonStyle(buttonOK).Render(" OK   "),
+			getButtonStyle(buttonRight).Render("  →   ")),
+		getButtonStyle(buttonDown).Render("  ↓   "),
 	)
 
-	volumeChannelRow := lipgloss.JoinHorizontal(lipgloss.Left,
-		getButtonStyle(buttonVolumeUp).Render("VOL+"),
-		strings.Repeat(" ", 8),
-		getButtonStyle(buttonChannelUp).Render("CH+"),
+	// Middle column: Volume & Channel (all buttons 6 chars wide)
+	volumeColumn := lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().Foreground(lipgloss.Color("#8BE9FD")).Render("Volume & Channel:"),
+		lipgloss.JoinHorizontal(lipgloss.Left,
+			getButtonStyle(buttonVolumeUp).Render("VOL + "),
+			"  ",
+			getButtonStyle(buttonChannelUp).Render("CH +  ")),
+		lipgloss.JoinHorizontal(lipgloss.Left,
+			getButtonStyle(buttonVolumeDown).Render("VOL - "),
+			"  ",
+			getButtonStyle(buttonChannelDown).Render("CH -  ")),
+		getButtonStyle(buttonMute).Render("MUTE  "),
 	)
 
-	navRow1 := lipgloss.JoinHorizontal(lipgloss.Left,
-		getButtonStyle(buttonVolumeDown).Render("VOL-"),
-		strings.Repeat(" ", 4),
-		getButtonStyle(buttonUp).Render(" ↑ "),
-		strings.Repeat(" ", 4),
-		getButtonStyle(buttonChannelDown).Render("CH-"),
+	// Right column: Control Functions (all buttons 6 chars wide)
+	functionColumn := lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().Foreground(lipgloss.Color("#FFB86C")).Render("Functions:"),
+		lipgloss.JoinHorizontal(lipgloss.Left,
+			getButtonStyle(buttonHome).Render("HOME  "),
+			" ",
+			getButtonStyle(buttonMenu).Render("MENU  ")),
+		lipgloss.JoinHorizontal(lipgloss.Left,
+			getButtonStyle(buttonBack).Render("BACK  "),
+			" ",
+			getButtonStyle(buttonInput).Render("INPUT ")),
+		"",
+		lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Render("HDMI:"),
+		lipgloss.JoinHorizontal(lipgloss.Left,
+			getButtonStyle(buttonHDMI1).Render("HDMI1 "),
+			" ",
+			getButtonStyle(buttonHDMI2).Render("HDMI2 ")),
+		lipgloss.JoinHorizontal(lipgloss.Left,
+			getButtonStyle(buttonHDMI3).Render("HDMI3 "),
+			" ",
+			getButtonStyle(buttonHDMI4).Render("HDMI4 ")),
 	)
 
-	navRow2 := lipgloss.JoinHorizontal(lipgloss.Left,
-		getButtonStyle(buttonMute).Render("MUTE"),
-		strings.Repeat(" ", 2),
-		getButtonStyle(buttonLeft).Render(" ← "),
-		getButtonStyle(buttonOK).Render(" OK "),
-		getButtonStyle(buttonRight).Render(" → "),
+	// Add column headers
+	navHeader := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#50FA7B")).
+		Render("Power & Navigation:")
+	
+	navColumnWithHeader := lipgloss.JoinVertical(lipgloss.Center,
+		navHeader,
+		navColumn,
 	)
 
-	navRow3 := lipgloss.JoinHorizontal(lipgloss.Center,
-		strings.Repeat(" ", 15),
-		getButtonStyle(buttonDown).Render(" ↓ "),
-	)
-
-	numberRow1 := lipgloss.JoinHorizontal(lipgloss.Left,
-		getButtonStyle(buttonNum1).Render(" 1 "),
-		getButtonStyle(buttonNum2).Render(" 2 "),
-		getButtonStyle(buttonNum3).Render(" 3 "),
-		strings.Repeat(" ", 4),
-		getButtonStyle(buttonHome).Render("HOME"),
-		getButtonStyle(buttonMenu).Render("MENU"),
-	)
-
-	numberRow2 := lipgloss.JoinHorizontal(lipgloss.Left,
-		getButtonStyle(buttonNum4).Render(" 4 "),
-		getButtonStyle(buttonNum5).Render(" 5 "),
-		getButtonStyle(buttonNum6).Render(" 6 "),
-		strings.Repeat(" ", 4),
-		getButtonStyle(buttonBack).Render("BACK"),
-		getButtonStyle(buttonInput).Render("INPUT"),
-	)
-
-	numberRow3 := lipgloss.JoinHorizontal(lipgloss.Left,
-		getButtonStyle(buttonNum7).Render(" 7 "),
-		getButtonStyle(buttonNum8).Render(" 8 "),
-		getButtonStyle(buttonNum9).Render(" 9 "),
-	)
-
-	numberRow4 := lipgloss.JoinHorizontal(lipgloss.Center,
-		strings.Repeat(" ", 4),
-		getButtonStyle(buttonNum0).Render(" 0 "),
-	)
-
-	hdmiRow1 := lipgloss.JoinHorizontal(lipgloss.Center,
+	// Join columns horizontally with spacing
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		navColumnWithHeader,
 		strings.Repeat(" ", 6),
-		getButtonStyle(buttonHDMI1).Render("HDMI1"),
-		getButtonStyle(buttonHDMI2).Render("HDMI2"),
-	)
-
-	hdmiRow2 := lipgloss.JoinHorizontal(lipgloss.Center,
+		volumeColumn,
 		strings.Repeat(" ", 6),
-		getButtonStyle(buttonHDMI3).Render("HDMI3"),
-		getButtonStyle(buttonHDMI4).Render("HDMI4"),
+		functionColumn,
 	)
-
-	// Join all rows vertically
-	remote := lipgloss.JoinVertical(lipgloss.Center,
-		powerRow,
-		"",
-		volumeChannelRow,
-		navRow1,
-		navRow2,
-		navRow3,
-		"",
-		numberRow1,
-		numberRow2,
-		numberRow3,
-		numberRow4,
-		"",
-		hdmiRow1,
-		hdmiRow2,
-	)
-
-	return remote
 }
 
 // renderStatusBar creates the status bar with last action result
 func (m RemoteModel) renderStatusBar() string {
 	if m.lastResponse == nil {
-		return "\n\n"
+		return ""
 	}
 
 	var status string
@@ -281,7 +263,89 @@ func (m RemoteModel) renderStatusBar() string {
 		status = errorStyle.Render("✗ " + m.lastResponse.Error)
 	}
 
-	return "\n\n" + status + "\n"
+	return status
+}
+
+// renderLogDisplay creates a simple 3-line log display area
+func (m RemoteModel) renderLogDisplay() string {
+	if len(m.logBuffer) == 0 {
+		return ""
+	}
+
+	// Always show exactly 3 lines
+	maxLines := 3
+	
+	// Get last 3 log entries
+	start := 0
+	if len(m.logBuffer) > maxLines {
+		start = len(m.logBuffer) - maxLines
+	}
+	
+	var logLines []string
+	
+	// Log header with auto-scroll indicator
+	hasMoreLogs := len(m.logBuffer) > maxLines
+	autoScrollIcon := ""
+	if hasMoreLogs {
+		autoScrollIcon = " ↓" // Shows auto-scroll is active
+	}
+	
+	header := fmt.Sprintf("─── LOGS%s ───", autoScrollIcon)
+	logLines = append(logLines, lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#6272A4")).
+		Render(header))
+		
+	// Show exactly 3 log lines (pad with empty if needed)
+	for i := 0; i < maxLines; i++ {
+		if start+i < len(m.logBuffer) {
+			entry := m.logBuffer[start+i]
+			timestamp := entry.Timestamp.Format("15:04:05")
+			
+			var levelStyle lipgloss.Style
+			switch entry.Level {
+			case "ERR":
+				levelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555"))
+			case "DBG":  
+				levelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4"))
+			default: // INF
+				levelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B"))
+			}
+			
+			logLine := fmt.Sprintf("%s [%s] %s", 
+				timestamp,
+				levelStyle.Render(entry.Level),
+				entry.Message)
+				
+			// Truncate long lines to fit
+			if len(logLine) > 70 {
+				logLine = logLine[:67] + "..."
+			}
+			
+			logLines = append(logLines, logLine)
+		} else {
+			// Empty line to maintain 3-line height
+			logLines = append(logLines, "")
+		}
+	}
+	
+	return strings.Join(logLines, "\n")
+}
+
+// addLogEntry adds a new log entry to the buffer
+func (m *RemoteModel) addLogEntry(level, message, action string) {
+	entry := LogEntry{
+		Timestamp: time.Now(),
+		Level:     level,
+		Message:   message,
+		Action:    action,
+	}
+	
+	m.logBuffer = append(m.logBuffer, entry)
+	
+	// Keep only the most recent entries
+	if len(m.logBuffer) > 20 { // Keep more in buffer than we display
+		m.logBuffer = m.logBuffer[1:]
+	}
 }
 
 // renderHelpText creates the help text at the bottom
@@ -395,6 +459,26 @@ func (m RemoteModel) handleRemoteButton(button remoteButton) (RemoteModel, tea.C
 	m.lastResponse = response
 	m.selectedButton = button
 	m.lastButtonPress = time.Now()
+
+	// Add log entry for display (if debug or test mode)
+	if m.debugMode || m.testMode {
+		var logLevel string
+		var logMessage string
+		
+		if response.Success {
+			logLevel = "INF"
+			if m.testMode {
+				logMessage = fmt.Sprintf("Test mode: %s action simulated", actionName)
+			} else {
+				logMessage = fmt.Sprintf("%s action completed successfully", actionName)
+			}
+		} else {
+			logLevel = "ERR"
+			logMessage = fmt.Sprintf("%s failed: %s", actionName, response.Error)
+		}
+		
+		m.addLogEntry(logLevel, logMessage, actionName)
+	}
 
 	// Add to history
 	entry := actionHistoryEntry{

@@ -98,7 +98,19 @@ func (m model) View() string {
 }
 
 func StartTUI(debug, test bool) error {
-	p := tea.NewProgram(initialModelWithFlags(debug, test), tea.WithAltScreen())
+	p := tea.NewProgram(
+		initialModelWithFlags(debug, test),
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+	)
+	
+	// Ensure proper cleanup on panic or interrupt
+	defer func() {
+		if r := recover(); r != nil {
+			p.Kill()
+		}
+	}()
+	
 	_, err := p.Run()
 	return err
 }
