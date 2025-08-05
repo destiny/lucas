@@ -20,12 +20,17 @@ type BraviaClient struct {
 	address    string
 	credential string
 	debug      bool
+	testMode   bool
 	logger     zerolog.Logger
 }
 
 // NewBraviaClient creates a new Bravia client instance
-
 func NewBraviaClient(address string, credential string, debug bool) *BraviaClient {
+	return NewBraviaClientWithFlags(address, credential, debug, false)
+}
+
+// NewBraviaClientWithFlags creates a new Bravia client instance with test mode support
+func NewBraviaClientWithFlags(address string, credential string, debug bool, testMode bool) *BraviaClient {
 	client := &BraviaClient{
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
@@ -33,6 +38,7 @@ func NewBraviaClient(address string, credential string, debug bool) *BraviaClien
 		address:    address,
 		credential: credential,
 		debug:      debug,
+		testMode:   testMode,
 		logger:     logger.New(),
 	}
 
@@ -45,6 +51,15 @@ func NewBraviaClient(address string, credential string, debug bool) *BraviaClien
 
 // remoteRequest sends an IRCC SOAP request for remote control commands
 func (c *BraviaClient) RemoteRequest(code BraviaRemoteCode) error {
+	// Test mode: simulate successful request without HTTP call
+	if c.testMode {
+		c.logger.Info().
+			Str("code", string(code)).
+			Str("address", c.address).
+			Msg("Test mode: Remote request simulated")
+		return nil
+	}
+
 	// SOAP envelope for IRCC command
 	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
@@ -96,6 +111,24 @@ func (c *BraviaClient) RemoteRequest(code BraviaRemoteCode) error {
 
 // controlRequest sends a JSON API control request
 func (c *BraviaClient) ControlRequest(endpoint BraviaEndpoint, payload BraviaPayload) (*http.Response, error) {
+	// Test mode: simulate successful request without HTTP call
+	if c.testMode {
+		c.logger.Info().
+			Str("endpoint", string(endpoint)).
+			Str("method", payload.Method).
+			Str("address", c.address).
+			Msg("Test mode: Control request simulated")
+		
+		// Create a mock response for test mode
+		mockResp := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"result": [{"status": "success"}]}`)),
+		}
+		mockResp.Header.Set("Content-Type", "application/json")
+		return mockResp, nil
+	}
+
 	// Marshal payload to JSON
 	jsonData, err := json.Marshal(payload)
 	if err != nil {

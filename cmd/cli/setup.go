@@ -47,16 +47,27 @@ type SetupModel struct {
 	// Connected device (when setup complete)
 	device     device.Device
 	deviceInfo device.DeviceInfo
+
+	// Flags
+	debugMode bool
+	testMode  bool
 }
 
 // NewSetupModel creates a new setup screen model
 func NewSetupModel() SetupModel {
+	return NewSetupModelWithFlags(false, false)
+}
+
+// NewSetupModelWithFlags creates a new setup screen model with flags
+func NewSetupModelWithFlags(debug, test bool) SetupModel {
 	return SetupModel{
 		focusedField:   setupFieldDeviceType,
 		deviceTypes:    []string{"Sony Bravia TV"},
 		selectedDevice: 0,
 		hostAddress:    "",
 		credential:     "",
+		debugMode:      debug,
+		testMode:       test,
 	}
 }
 
@@ -240,8 +251,8 @@ func (m SetupModel) handleConnect() (SetupModel, tea.Cmd) {
 	m.connecting = true
 	m.connectionError = ""
 
-	// Create device connection
-	device := bravia.NewBraviaRemote(m.hostAddress, m.credential, false)
+	// Create device connection with debug and test flags
+	device := bravia.NewBraviaRemoteWithFlags(m.hostAddress, m.credential, m.debugMode, m.testMode)
 
 	// Test connection by getting device info
 	deviceInfo := device.GetDeviceInfo()
@@ -475,4 +486,14 @@ func (m SetupModel) GetDevice() device.Device {
 // GetDeviceInfo returns the device info
 func (m SetupModel) GetDeviceInfo() device.DeviceInfo {
 	return m.deviceInfo
+}
+
+// GetDebugMode returns the debug mode flag
+func (m SetupModel) GetDebugMode() bool {
+	return m.debugMode
+}
+
+// GetTestMode returns the test mode flag
+func (m SetupModel) GetTestMode() bool {
+	return m.testMode
 }

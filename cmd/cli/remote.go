@@ -25,20 +25,40 @@ type RemoteModel struct {
 	// Response and history
 	lastResponse  *device.ActionResponse
 	actionHistory []actionHistoryEntry
+
+	// Flags
+	debugMode bool
+	testMode  bool
+
+	// Screen dimensions for responsive layout
+	width  int
+	height int
 }
 
 // NewRemoteModel creates a new remote control screen model
 func NewRemoteModel(dev device.Device, info device.DeviceInfo) RemoteModel {
+	return NewRemoteModelWithFlags(dev, info, false, false)
+}
+
+// NewRemoteModelWithFlags creates a new remote control screen model with flags
+func NewRemoteModelWithFlags(dev device.Device, info device.DeviceInfo, debug, test bool) RemoteModel {
 	return RemoteModel{
 		device:        dev,
 		deviceInfo:    info,
 		actionHistory: []actionHistoryEntry{},
+		debugMode:     debug,
+		testMode:      test,
 	}
 }
 
 // Update handles remote control screen messages
 func (m RemoteModel) Update(msg tea.Msg) (RemoteModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		// Navigation keys
@@ -100,42 +120,49 @@ func (m RemoteModel) Update(msg tea.Msg) (RemoteModel, tea.Cmd) {
 
 // View renders the remote control screen
 func (m RemoteModel) View() string {
-	var b strings.Builder
+	// Use lipgloss to create a centered, responsive layout
+	var content strings.Builder
 
-	b.WriteString(titleStyle.Render("Lucas CLI - TV Remote Control"))
-	b.WriteString("\n\n")
+	// Header
+	header := titleStyle.Render("Lucas CLI - TV Remote Control")
+	content.WriteString(header)
+	content.WriteString("\n\n")
 
 	// Device Info
-	b.WriteString(successStyle.Render("📺 " + m.deviceInfo.Model + " Connected"))
-	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("Address: %s", m.deviceInfo.Address))
-	b.WriteString("\n\n")
+	deviceInfo := successStyle.Render("📺 " + m.deviceInfo.Model + " Connected")
+	if m.testMode {
+		deviceInfo += " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#FFB86C")).Render("(Test Mode)")
+	}
+	content.WriteString(deviceInfo)
+	content.WriteString("\n")
+	content.WriteString(fmt.Sprintf("Address: %s", m.deviceInfo.Address))
+	content.WriteString("\n\n")
 
-	// Remote Control Layout
-	b.WriteString(m.renderRemoteLayout())
+	// Remote Control Layout (responsive)
+	remoteLayout := m.renderResponsiveRemoteLayout()
+	content.WriteString(remoteLayout)
 
-	// Status and Last Action
-	if m.lastResponse != nil {
-		b.WriteString("\n")
-		if m.lastResponse.Success {
-			b.WriteString(successStyle.Render("✓ " + fmt.Sprintf("%v", m.lastResponse.Data)))
-		} else {
-			b.WriteString(errorStyle.Render("✗ " + m.lastResponse.Error))
-		}
-		b.WriteString("\n")
+	// Status Bar
+	statusBar := m.renderStatusBar()
+	content.WriteString(statusBar)
+
+	// Help Text
+	helpText := m.renderHelpText()
+	content.WriteString(helpText)
+
+	// Center content if terminal is wide enough
+	if m.width > 80 {
+		return lipgloss.NewStyle().
+			Width(m.width).
+			Align(lipgloss.Center).
+			Render(content.String())
 	}
 
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("Arrows: Navigate • Enter: OK • P: Power • +/-: Volume • M: Mute • 0-9: Numbers • H: Home • I: Input • F1-F4: HDMI • q: Disconnect"))
-
-	return b.String()
+	return content.String()
 }
 
-// renderRemoteLayout creates the visual remote control layout
-func (m RemoteModel) renderRemoteLayout() string {
-	var b strings.Builder
-
-	// Get button style based on recent press
+// renderResponsiveRemoteLayout creates a responsive remote control layout
+func (m RemoteModel) renderResponsiveRemoteLayout() string {
 	getButtonStyle := func(btn remoteButton) lipgloss.Style {
 		base := remoteButtonStyle
 		if m.selectedButton == btn && time.Since(m.lastButtonPress) < 200*time.Millisecond {
@@ -144,78 +171,129 @@ func (m RemoteModel) renderRemoteLayout() string {
 		return base
 	}
 
-	// Power button (top center)
-	b.WriteString("                    ")
-	b.WriteString(getButtonStyle(buttonPower).Render(" PWR "))
-	b.WriteString("\n\n")
+	// Create button grid using lipgloss
+	powerRow := lipgloss.JoinHorizontal(lipgloss.Center,
+		getButtonStyle(buttonPower).Render(" PWR "),
+	)
 
-	// Volume and Channel controls with Navigation pad
-	b.WriteString("  ")
-	b.WriteString(getButtonStyle(buttonVolumeUp).Render("VOL+"))
-	b.WriteString("           ")
-	b.WriteString(getButtonStyle(buttonChannelUp).Render("CH+"))
-	b.WriteString("\n")
+	volumeChannelRow := lipgloss.JoinHorizontal(lipgloss.Left,
+		getButtonStyle(buttonVolumeUp).Render("VOL+"),
+		strings.Repeat(" ", 8),
+		getButtonStyle(buttonChannelUp).Render("CH+"),
+	)
 
-	b.WriteString("  ")
-	b.WriteString(getButtonStyle(buttonVolumeDown).Render("VOL-"))
-	b.WriteString("      ")
-	b.WriteString(getButtonStyle(buttonUp).Render(" ↑ "))
-	b.WriteString("      ")
-	b.WriteString(getButtonStyle(buttonChannelDown).Render("CH-"))
-	b.WriteString("\n")
+	navRow1 := lipgloss.JoinHorizontal(lipgloss.Left,
+		getButtonStyle(buttonVolumeDown).Render("VOL-"),
+		strings.Repeat(" ", 4),
+		getButtonStyle(buttonUp).Render(" ↑ "),
+		strings.Repeat(" ", 4),
+		getButtonStyle(buttonChannelDown).Render("CH-"),
+	)
 
-	b.WriteString("  ")
-	b.WriteString(getButtonStyle(buttonMute).Render("MUTE"))
-	b.WriteString("   ")
-	b.WriteString(getButtonStyle(buttonLeft).Render(" ← "))
-	b.WriteString(getButtonStyle(buttonOK).Render(" OK "))
-	b.WriteString(getButtonStyle(buttonRight).Render(" → "))
-	b.WriteString("\n")
+	navRow2 := lipgloss.JoinHorizontal(lipgloss.Left,
+		getButtonStyle(buttonMute).Render("MUTE"),
+		strings.Repeat(" ", 2),
+		getButtonStyle(buttonLeft).Render(" ← "),
+		getButtonStyle(buttonOK).Render(" OK "),
+		getButtonStyle(buttonRight).Render(" → "),
+	)
 
-	b.WriteString("                 ")
-	b.WriteString(getButtonStyle(buttonDown).Render(" ↓ "))
-	b.WriteString("\n\n")
+	navRow3 := lipgloss.JoinHorizontal(lipgloss.Center,
+		strings.Repeat(" ", 15),
+		getButtonStyle(buttonDown).Render(" ↓ "),
+	)
 
-	// Number pad
-	b.WriteString("  ")
-	b.WriteString(getButtonStyle(buttonNum1).Render(" 1 "))
-	b.WriteString(getButtonStyle(buttonNum2).Render(" 2 "))
-	b.WriteString(getButtonStyle(buttonNum3).Render(" 3 "))
-	b.WriteString("     ")
-	b.WriteString(getButtonStyle(buttonHome).Render("HOME"))
-	b.WriteString(getButtonStyle(buttonMenu).Render("MENU"))
-	b.WriteString("\n")
+	numberRow1 := lipgloss.JoinHorizontal(lipgloss.Left,
+		getButtonStyle(buttonNum1).Render(" 1 "),
+		getButtonStyle(buttonNum2).Render(" 2 "),
+		getButtonStyle(buttonNum3).Render(" 3 "),
+		strings.Repeat(" ", 4),
+		getButtonStyle(buttonHome).Render("HOME"),
+		getButtonStyle(buttonMenu).Render("MENU"),
+	)
 
-	b.WriteString("  ")
-	b.WriteString(getButtonStyle(buttonNum4).Render(" 4 "))
-	b.WriteString(getButtonStyle(buttonNum5).Render(" 5 "))
-	b.WriteString(getButtonStyle(buttonNum6).Render(" 6 "))
-	b.WriteString("     ")
-	b.WriteString(getButtonStyle(buttonBack).Render("BACK"))
-	b.WriteString(getButtonStyle(buttonInput).Render("INPUT"))
-	b.WriteString("\n")
+	numberRow2 := lipgloss.JoinHorizontal(lipgloss.Left,
+		getButtonStyle(buttonNum4).Render(" 4 "),
+		getButtonStyle(buttonNum5).Render(" 5 "),
+		getButtonStyle(buttonNum6).Render(" 6 "),
+		strings.Repeat(" ", 4),
+		getButtonStyle(buttonBack).Render("BACK"),
+		getButtonStyle(buttonInput).Render("INPUT"),
+	)
 
-	b.WriteString("  ")
-	b.WriteString(getButtonStyle(buttonNum7).Render(" 7 "))
-	b.WriteString(getButtonStyle(buttonNum8).Render(" 8 "))
-	b.WriteString(getButtonStyle(buttonNum9).Render(" 9 "))
-	b.WriteString("\n")
+	numberRow3 := lipgloss.JoinHorizontal(lipgloss.Left,
+		getButtonStyle(buttonNum7).Render(" 7 "),
+		getButtonStyle(buttonNum8).Render(" 8 "),
+		getButtonStyle(buttonNum9).Render(" 9 "),
+	)
 
-	b.WriteString("        ")
-	b.WriteString(getButtonStyle(buttonNum0).Render(" 0 "))
-	b.WriteString("\n\n")
+	numberRow4 := lipgloss.JoinHorizontal(lipgloss.Center,
+		strings.Repeat(" ", 4),
+		getButtonStyle(buttonNum0).Render(" 0 "),
+	)
 
-	// HDMI shortcuts
-	b.WriteString("              ")
-	b.WriteString(getButtonStyle(buttonHDMI1).Render("HDMI1"))
-	b.WriteString(getButtonStyle(buttonHDMI2).Render("HDMI2"))
-	b.WriteString("\n")
-	b.WriteString("              ")
-	b.WriteString(getButtonStyle(buttonHDMI3).Render("HDMI3"))
-	b.WriteString(getButtonStyle(buttonHDMI4).Render("HDMI4"))
-	b.WriteString("\n")
+	hdmiRow1 := lipgloss.JoinHorizontal(lipgloss.Center,
+		strings.Repeat(" ", 6),
+		getButtonStyle(buttonHDMI1).Render("HDMI1"),
+		getButtonStyle(buttonHDMI2).Render("HDMI2"),
+	)
 
-	return b.String()
+	hdmiRow2 := lipgloss.JoinHorizontal(lipgloss.Center,
+		strings.Repeat(" ", 6),
+		getButtonStyle(buttonHDMI3).Render("HDMI3"),
+		getButtonStyle(buttonHDMI4).Render("HDMI4"),
+	)
+
+	// Join all rows vertically
+	remote := lipgloss.JoinVertical(lipgloss.Center,
+		powerRow,
+		"",
+		volumeChannelRow,
+		navRow1,
+		navRow2,
+		navRow3,
+		"",
+		numberRow1,
+		numberRow2,
+		numberRow3,
+		numberRow4,
+		"",
+		hdmiRow1,
+		hdmiRow2,
+	)
+
+	return remote
+}
+
+// renderStatusBar creates the status bar with last action result
+func (m RemoteModel) renderStatusBar() string {
+	if m.lastResponse == nil {
+		return "\n\n"
+	}
+
+	var status string
+	if m.lastResponse.Success {
+		status = successStyle.Render("✓ Action successful")
+		if m.lastResponse.Data != nil {
+			status += fmt.Sprintf(": %v", m.lastResponse.Data)
+		}
+	} else {
+		status = errorStyle.Render("✗ " + m.lastResponse.Error)
+	}
+
+	return "\n\n" + status + "\n"
+}
+
+// renderHelpText creates the help text at the bottom
+func (m RemoteModel) renderHelpText() string {
+	help := "Arrows: Navigate • Enter: OK • P: Power • +/-: Volume • M: Mute • 0-9: Numbers"
+	if m.width > 100 {
+		help += " • H: Home • I: Input • F1-F4: HDMI • q: Disconnect"
+	} else {
+		help += " • q: Disconnect"
+	}
+
+	return "\n" + helpStyle.Render(help)
 }
 
 // handleRemoteButton executes a remote control action

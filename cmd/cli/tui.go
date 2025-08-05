@@ -60,7 +60,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			
 			// Check if connection was successful
 			if m.setupModel.IsConnected() {
-				m.remoteModel = NewRemoteModel(m.setupModel.GetDevice(), m.setupModel.GetDeviceInfo())
+				m.remoteModel = NewRemoteModelWithFlags(
+					m.setupModel.GetDevice(), 
+					m.setupModel.GetDeviceInfo(),
+					m.setupModel.GetDebugMode(),
+					m.setupModel.GetTestMode(),
+				)
 				m.currentScreen = screenRemoteControl
 			}
 			
@@ -92,8 +97,15 @@ func (m model) View() string {
 	}
 }
 
-func StartTUI() error {
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+func StartTUI(debug, test bool) error {
+	p := tea.NewProgram(initialModelWithFlags(debug, test), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
+}
+
+func initialModelWithFlags(debug, test bool) model {
+	return model{
+		currentScreen: screenDeviceSetup,
+		setupModel:    NewSetupModelWithFlags(debug, test),
+	}
 }

@@ -16,7 +16,12 @@ type BraviaRemote struct {
 
 // NewBraviaRemote creates a new BraviaRemote device
 func NewBraviaRemote(address, credential string, debug bool) *BraviaRemote {
-	client := NewBraviaClient(address, credential, debug)
+	return NewBraviaRemoteWithFlags(address, credential, debug, false)
+}
+
+// NewBraviaRemoteWithFlags creates a new BraviaRemote device with test mode support
+func NewBraviaRemoteWithFlags(address, credential string, debug, testMode bool) *BraviaRemote {
+	client := NewBraviaClientWithFlags(address, credential, debug, testMode)
 
 	return &BraviaRemote{
 		client: client,
