@@ -21,6 +21,7 @@ const (
 	setupFieldHostAddress
 	setupFieldCredential
 	setupFieldConnect
+	setupFieldConfigureDevices
 )
 
 // SetupModel handles the device setup screen
@@ -51,6 +52,9 @@ type SetupModel struct {
 	// Flags
 	debugMode bool
 	testMode  bool
+	
+	// Configuration
+	configPath string
 }
 
 // NewSetupModel creates a new setup screen model
@@ -68,7 +72,15 @@ func NewSetupModelWithFlags(debug, test bool) SetupModel {
 		credential:     "",
 		debugMode:      debug,
 		testMode:       test,
+		configPath:     "hub.yml", // Default config path
 	}
+}
+
+// NewSetupModelWithConfig creates a new setup screen model with config path
+func NewSetupModelWithConfig(debug, test bool, configPath string) SetupModel {
+	model := NewSetupModelWithFlags(debug, test)
+	model.configPath = configPath
+	return model
 }
 
 // Update handles setup screen messages
@@ -82,6 +94,9 @@ func (m SetupModel) Update(msg tea.Msg) (SetupModel, tea.Cmd) {
 		case "enter":
 			if m.focusedField == setupFieldConnect {
 				return m.handleConnect()
+			}
+			if m.focusedField == setupFieldConfigureDevices {
+				return m.handleConfigureDevices()
 			}
 			return m, nil
 
@@ -184,6 +199,14 @@ func (m SetupModel) View() string {
 	b.WriteString(connectStyle.Render(connectText))
 	b.WriteString("\n\n")
 
+	// Configure Devices Button
+	configStyle := buttonStyle
+	if m.focusedField == setupFieldConfigureDevices {
+		configStyle = buttonActiveStyle
+	}
+	b.WriteString(configStyle.Render("Configure Devices"))
+	b.WriteString("\n\n")
+
 	// Connection Error
 	if m.connectionError != "" {
 		b.WriteString(errorStyle.Render("Error: " + m.connectionError))
@@ -191,14 +214,14 @@ func (m SetupModel) View() string {
 	}
 
 	// Help
-	b.WriteString(helpStyle.Render("↑/↓: Navigate • Tab: Next field • Enter: Connect • ←/→: Move cursor • Home/End: Start/End • Ctrl+V: Paste • q: Quit"))
+	b.WriteString(helpStyle.Render("↑/↓: Navigate • Tab: Next field • Enter: Action • ←/→: Move cursor • Home/End: Start/End • Ctrl+V: Paste • q: Quit"))
 
 	return b.String()
 }
 
 // handleTabNavigation moves between input fields
 func (m SetupModel) handleTabNavigation(reverse bool) SetupModel {
-	fields := []setupField{setupFieldDeviceType, setupFieldHostAddress, setupFieldCredential, setupFieldConnect}
+	fields := []setupField{setupFieldDeviceType, setupFieldHostAddress, setupFieldCredential, setupFieldConnect, setupFieldConfigureDevices}
 
 	currentIndex := -1
 	for i, field := range fields {
@@ -503,4 +526,18 @@ func (m SetupModel) GetDebugMode() bool {
 // GetTestMode returns the test mode flag
 func (m SetupModel) GetTestMode() bool {
 	return m.testMode
+}
+
+// handleConfigureDevices launches the device configuration screen
+func (m SetupModel) handleConfigureDevices() (SetupModel, tea.Cmd) {
+	// For now, we'll show a placeholder message
+	// In a full implementation, the parent application would handle switching
+	// to the device configuration screen using the config path: m.configPath
+	
+	log := logger.New()
+	log.Info().
+		Str("config_path", m.configPath).
+		Msg("Device configuration requested - would launch device config screen")
+	
+	return m, nil
 }
