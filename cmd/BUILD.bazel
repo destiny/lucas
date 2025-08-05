@@ -1,0 +1,17 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "cmd",
+    srcs = [
+        "cli.go",
+        "hub.go", 
+        "root.go",
+    ],
+    importpath = "lucas/cmd",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//cmd/cli",
+        "//internal/logger",
+        "@com_github_spf13_cobra//:cobra",
+    ],
+)
