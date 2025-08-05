@@ -5,6 +5,9 @@ go_library(
     srcs = [
         "client.go",
         "constants.go",
+        "device.go",
+        "example.go",
+        "remote.go",
         "types.go",
     ],
     importpath = "lucas/internal/bravia",
