@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,37 +63,46 @@ func (s *ZMQServer) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to create ROUTER socket: %w", err)
 	}
-
-	// Configure CurveZMQ server (temporarily disabled for testing)
-	// TODO: Re-enable after basic communication is verified
-	/*
-		err = socket.ServerAuthCurve("*", s.keys.GetServerPrivateKey())
+	
+	// Ensure socket is cleaned up on any error
+	defer func() {
 		if err != nil {
 			socket.Close()
-			return fmt.Errorf("failed to configure CurveZMQ server: %w", err)
 		}
-	*/
-	s.logger.Info().Msg("CurveZMQ disabled for testing - using plain socket")
+	}()
+
+	// Configure CurveZMQ server
+	err = socket.ServerAuthCurve("*", s.keys.GetServerPrivateKey())
+	if err != nil {
+		return fmt.Errorf("failed to configure CurveZMQ server: %w", err)
+	}
+	s.logger.Info().Msg("CurveZMQ server authentication enabled")
 
 	// Set socket options
-	if err := socket.SetLinger(1000); err != nil {
-		socket.Close()
+	if err = socket.SetLinger(1000); err != nil {
 		return fmt.Errorf("failed to set linger: %w", err)
 	}
 
-	if err := socket.SetRcvhwm(1000); err != nil {
-		socket.Close()
+	if err = socket.SetRcvhwm(1000); err != nil {
 		return fmt.Errorf("failed to set receive high watermark: %w", err)
 	}
 
-	if err := socket.SetSndhwm(1000); err != nil {
-		socket.Close()
+	if err = socket.SetSndhwm(1000); err != nil {
 		return fmt.Errorf("failed to set send high watermark: %w", err)
 	}
 
+	// Set receive timeout to match hub timeout (30 seconds) for internet stability
+	if err = socket.SetRcvtimeo(30 * time.Second); err != nil {
+		return fmt.Errorf("failed to set receive timeout: %w", err)
+	}
+
+	// Set send timeout for internet connection reliability
+	if err = socket.SetSndtimeo(30 * time.Second); err != nil {
+		return fmt.Errorf("failed to set send timeout: %w", err)
+	}
+
 	// Bind to address
-	if err := socket.Bind(s.address); err != nil {
-		socket.Close()
+	if err = socket.Bind(s.address); err != nil {
 		return fmt.Errorf("failed to bind to address: %w", err)
 	}
 
@@ -141,21 +151,39 @@ func (s *ZMQServer) messageLoop() {
 		msg, err := s.socket.RecvMessageBytes(0)
 		if err != nil {
 			if s.running {
+				// Check if it's a timeout (normal for internet connections)
+				if err.Error() == "resource temporarily unavailable" {
+					// Timeout occurred, continue processing
+					continue
+				}
 				s.logger.Error().Err(err).Msg("Failed to receive message")
 			}
 			continue
 		}
 
-		if len(msg) < 2 {
+		// Handle both DEALER (2-frame) and REQ (3-frame) message formats
+		var identity string
+		var messageData []byte
+
+		if len(msg) == 2 {
+			// DEALER format: [identity][message]
+			identity = string(msg[0])
+			messageData = msg[1]
+		} else if len(msg) >= 3 {
+			// REQ format: [identity][empty delimiter][message]
+			identity = string(msg[0])
+			messageData = msg[2]
+		} else {
 			s.logger.Warn().
 				Int("parts_count", len(msg)).
-				Msg("Received malformed message (too few parts)")
+				Msg("Received malformed message (invalid frame count)")
 			continue
 		}
 
-		// First part is the identity, second part is the actual message
-		identity := string(msg[0])
-		messageData := msg[2]
+		frameFormat := "DEALER"
+		if len(msg) >= 3 {
+			frameFormat = "REQ"
+		}
 
 		s.logger.Debug().
 			Str("identity", identity).
@@ -164,6 +192,7 @@ func (s *ZMQServer) messageLoop() {
 			Int("message_size", len(messageData)).
 			Str("message_hex", s.getMessageHex(messageData)).
 			Int("parts_count", len(msg)).
+			Str("frame_format", frameFormat).
 			Msg("Received message from hub")
 
 		// Log all message parts for debugging
@@ -258,13 +287,43 @@ func (s *ZMQServer) handleHubOnline(identity string, message map[string]interfac
 	if !ok {
 		return s.createErrorResponse("missing_hub_id", "Hub online message must include hub_id")
 	}
+	// Normalize hub_id by trimming whitespace
+	hubID = strings.TrimSpace(hubID)
+
+	s.logger.Debug().
+		Str("identity", identity).
+		Str("received_hub_id", hubID).
+		Msg("Processing hub_online: received hub_id from message")
 
 	// Update hub status in database
 	if err := s.database.UpdateHubStatus(hubID, "online"); err != nil {
-		s.logger.Error().
+		s.logger.Warn().
 			Str("hub_id", hubID).
 			Err(err).
-			Msg("Failed to update hub status")
+			Msg("Hub not found in database, attempting auto-registration")
+		
+		// Try to auto-register the hub
+		name := fmt.Sprintf("Auto-registered Hub (%s)", hubID[:8])
+		_, regErr := s.database.RegisterHub(hubID, "", name, "")
+		if regErr != nil {
+			s.logger.Error().
+				Str("hub_id", hubID).
+				Err(regErr).
+				Msg("Failed to auto-register hub")
+			return s.createErrorResponse("registration_failed", "Hub not registered and auto-registration failed")
+		}
+		
+		s.logger.Info().
+			Str("hub_id", hubID).
+			Msg("Successfully auto-registered hub")
+		
+		// Now update the status
+		if err := s.database.UpdateHubStatus(hubID, "online"); err != nil {
+			s.logger.Error().
+				Str("hub_id", hubID).
+				Err(err).
+				Msg("Failed to update hub status after auto-registration")
+		}
 	}
 
 	// Store connection info
@@ -276,12 +335,21 @@ func (s *ZMQServer) handleHubOnline(identity string, message map[string]interfac
 		Status:   "online",
 	}
 	s.mutex.Unlock()
+	
+	s.logger.Debug().
+		Str("identity", identity).
+		Str("stored_hub_id", hubID).
+		Int("stored_hub_id_len", len(hubID)).
+		Str("stored_hub_id_hex", fmt.Sprintf("%x", []byte(hubID))).
+		Msg("Stored hub connection in connection map")
 
-	// Send gateway ready message
+	// Send device list request (heartbeat mechanism)
 	response := map[string]interface{}{
-		"type":      "gateway_ready",
-		"success":   true,
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"type":         "device_list_request",
+		"success":      true,
+		"message":      "Please send current device status",
+		"request_type": "heartbeat",
+		"timestamp":    time.Now().UTC().Format(time.RFC3339),
 	}
 
 	responseJSON, _ := json.Marshal(response)
@@ -304,14 +372,28 @@ func (s *ZMQServer) handleDeviceList(identity string, message map[string]interfa
 	}
 
 	// Get hub from database
+	s.logger.Debug().
+		Str("identity", identity).
+		Str("conn_hub_id", conn.HubID).
+		Int("conn_hub_id_len", len(conn.HubID)).
+		Str("conn_hub_id_hex", fmt.Sprintf("%x", []byte(conn.HubID))).
+		Msg("Looking up hub in database for device list processing")
+		
 	hub, err := s.database.GetHubByHubID(conn.HubID)
 	if err != nil {
 		s.logger.Error().
-			Str("hub_id", conn.HubID).
+			Str("identity", identity).
+			Str("conn_hub_id", conn.HubID).
 			Err(err).
-			Msg("Failed to get hub from database")
+			Msg("Failed to get hub from database for device list")
 		return s.createErrorResponse("database_error", "Failed to get hub")
 	}
+	
+	s.logger.Debug().
+		Str("identity", identity).
+		Str("found_hub_id", hub.HubID).
+		Int("hub_db_id", hub.ID).
+		Msg("Successfully found hub in database")
 
 	// Process each device
 	for _, deviceData := range devices {
@@ -338,23 +420,33 @@ func (s *ZMQServer) handleDeviceList(identity string, message map[string]interfa
 		if deviceID == "" || deviceType == "" || name == "" {
 			s.logger.Warn().
 				Str("hub_id", conn.HubID).
+				Str("device_id", deviceID).
+				Str("device_type", deviceType).
+				Str("name", name).
 				Msg("Skipping device with missing required fields")
 			continue
 		}
 
 		// Create or update device
-		_, err := s.database.CreateDevice(hub.ID, deviceID, deviceType, name, model, address, capabilities)
+		device, err := s.database.CreateDevice(hub.ID, deviceID, deviceType, name, model, address, capabilities)
 		if err != nil {
 			s.logger.Error().
 				Str("hub_id", conn.HubID).
 				Str("device_id", deviceID).
+				Str("device_type", deviceType).
+				Str("name", name).
 				Err(err).
 				Msg("Failed to create/update device")
 		} else {
 			s.logger.Info().
 				Str("hub_id", conn.HubID).
 				Str("device_id", deviceID).
-				Msg("Registered device")
+				Str("device_type", deviceType).
+				Str("name", name).
+				Str("model", model).
+				Str("address", address).
+				Int("db_device_id", device.ID).
+				Msg("Successfully registered/updated device")
 		}
 	}
 
@@ -389,10 +481,11 @@ func (s *ZMQServer) handlePing(identity string, message map[string]interface{}) 
 
 // sendResponse sends a response back to a hub
 func (s *ZMQServer) sendResponse(identity string, response []byte) error {
-	if s.socket == nil {
-		return fmt.Errorf("socket not initialized")
+	if s.socket == nil || !s.running {
+		return fmt.Errorf("socket not initialized or server not running")
 	}
 
+	// ROUTER must send: [identity][response] to match DEALER socket expectations (2 frames)
 	_, err := s.socket.SendMessage(identity, response)
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
@@ -444,19 +537,39 @@ func (s *ZMQServer) checkConnectionTimeouts() {
 	now := time.Now()
 
 	s.mutex.Lock()
+	timedOutConnections := make([]string, 0)
+	
 	for identity, conn := range s.connections {
 		if now.Sub(conn.LastPing) > timeout {
 			s.logger.Warn().
 				Str("identity", identity).
 				Str("hub_id", conn.HubID).
+				Dur("last_ping_age", now.Sub(conn.LastPing)).
 				Msg("Hub connection timed out")
 
-			// Update database status
-			s.database.UpdateHubStatus(conn.HubID, "offline")
-
-			// Remove from active connections
-			delete(s.connections, identity)
+			timedOutConnections = append(timedOutConnections, identity)
 		}
+	}
+	
+	// Remove timed out connections and update database
+	for _, identity := range timedOutConnections {
+		conn := s.connections[identity]
+		
+		// Update database status
+		if err := s.database.UpdateHubStatus(conn.HubID, "offline"); err != nil {
+			s.logger.Error().
+				Err(err).
+				Str("hub_id", conn.HubID).
+				Msg("Failed to update hub status to offline")
+		}
+
+		// Remove from active connections
+		delete(s.connections, identity)
+		
+		s.logger.Info().
+			Str("identity", identity).
+			Str("hub_id", conn.HubID).
+			Msg("Removed timed out hub connection")
 	}
 	s.mutex.Unlock()
 }
@@ -478,6 +591,10 @@ func (s *ZMQServer) GetActiveConnections() map[string]*HubConnection {
 
 // SendMessageToHub sends a message to a specific hub
 func (s *ZMQServer) SendMessageToHub(hubID string, message []byte) error {
+	if s.socket == nil || !s.running {
+		return fmt.Errorf("server not running or socket not initialized")
+	}
+	
 	s.mutex.RLock()
 	var targetIdentity string
 	for identity, conn := range s.connections {

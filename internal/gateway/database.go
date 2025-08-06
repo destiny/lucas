@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,17 +21,17 @@ type User struct {
 }
 
 type Hub struct {
-	ID            int       `json:"id"`
-	UserID        int       `json:"user_id"`
-	HubID         string    `json:"hub_id"`
-	Name          string    `json:"name"`
-	PublicKey     string    `json:"public_key"`
-	ProductKey    string    `json:"product_key"`
-	Endpoint      string    `json:"endpoint"`
-	Status        string    `json:"status"`
-	AutoRegistered bool     `json:"auto_registered"`
-	LastSeen      time.Time `json:"last_seen"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID            int            `json:"id"`
+	UserID        sql.NullInt32  `json:"user_id"`
+	HubID         string         `json:"hub_id"`
+	Name          string         `json:"name"`
+	PublicKey     string         `json:"public_key"`
+	ProductKey    string         `json:"product_key"`
+	Endpoint      string         `json:"endpoint"`
+	Status        string         `json:"status"`
+	AutoRegistered bool          `json:"auto_registered"`
+	LastSeen      time.Time      `json:"last_seen"`
+	CreatedAt     time.Time      `json:"created_at"`
 }
 
 type Device struct {
@@ -194,10 +195,9 @@ func (d *Database) GetHub(id int) (*Hub, error) {
 			  FROM hubs WHERE id = ?`
 	
 	var hub Hub
-	var userID sql.NullInt64
 	var productKey sql.NullString
 	err := d.db.QueryRow(query, id).Scan(
-		&hub.ID, &userID, &hub.HubID, &hub.Name, &hub.PublicKey, 
+		&hub.ID, &hub.UserID, &hub.HubID, &hub.Name, &hub.PublicKey, 
 		&productKey, &hub.Endpoint, &hub.Status, &hub.AutoRegistered, &hub.LastSeen, &hub.CreatedAt,
 	)
 	if err != nil {
@@ -205,22 +205,42 @@ func (d *Database) GetHub(id int) (*Hub, error) {
 	}
 	
 	// Handle nullable fields
-	hub.UserID = int(userID.Int64)
 	hub.ProductKey = productKey.String
 
 	return &hub, nil
 }
 
 func (d *Database) GetHubByHubID(hubID string) (*Hub, error) {
+	// Normalize the input hub_id by trimming whitespace
+	normalizedHubID := strings.TrimSpace(hubID)
+	
 	query := `SELECT id, user_id, hub_id, name, public_key, endpoint, status, last_seen, created_at 
 			  FROM hubs WHERE hub_id = ?`
 	
 	var hub Hub
-	err := d.db.QueryRow(query, hubID).Scan(
+	err := d.db.QueryRow(query, normalizedHubID).Scan(
 		&hub.ID, &hub.UserID, &hub.HubID, &hub.Name, &hub.PublicKey, 
 		&hub.Endpoint, &hub.Status, &hub.LastSeen, &hub.CreatedAt,
 	)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			// Log all hub IDs in database for debugging
+			rows, debugErr := d.db.Query("SELECT hub_id, length(hub_id), hex(hub_id) FROM hubs")
+			if debugErr == nil {
+				var existingHubDetails []string
+				for rows.Next() {
+					var existingID string
+					var idLength int
+					var idHex string
+					if rows.Scan(&existingID, &idLength, &idHex) == nil {
+						existingHubDetails = append(existingHubDetails, fmt.Sprintf("'%s' (len:%d, hex:%s)", existingID, idLength, idHex))
+					}
+				}
+				rows.Close()
+				return nil, fmt.Errorf("hub with id '%s' (len:%d, hex:%x, normalized:'%s') not found in database (existing hubs: %v)", 
+					hubID, len(hubID), []byte(hubID), normalizedHubID, existingHubDetails)
+			}
+		}
 		return nil, fmt.Errorf("failed to get hub by hub_id: %w", err)
 	}
 
@@ -265,10 +285,9 @@ func (d *Database) GetHubByProductKey(productKey string) (*Hub, error) {
 			  FROM hubs WHERE product_key = ?`
 	
 	var hub Hub
-	var userID sql.NullInt64
 	var productKeyDB sql.NullString
 	err := d.db.QueryRow(query, productKey).Scan(
-		&hub.ID, &userID, &hub.HubID, &hub.Name, &hub.PublicKey,
+		&hub.ID, &hub.UserID, &hub.HubID, &hub.Name, &hub.PublicKey,
 		&productKeyDB, &hub.Endpoint, &hub.Status, &hub.AutoRegistered, &hub.LastSeen, &hub.CreatedAt,
 	)
 	if err != nil {
@@ -276,7 +295,6 @@ func (d *Database) GetHubByProductKey(productKey string) (*Hub, error) {
 	}
 	
 	// Handle nullable fields
-	hub.UserID = int(userID.Int64)
 	hub.ProductKey = productKeyDB.String
 
 	return &hub, nil
@@ -329,10 +347,21 @@ func (d *Database) GetUserHubs(userID int) ([]*Hub, error) {
 
 func (d *Database) UpdateHubStatus(hubID, status string) error {
 	query := `UPDATE hubs SET status = ?, last_seen = CURRENT_TIMESTAMP WHERE hub_id = ?`
-	_, err := d.db.Exec(query, status, hubID)
+	result, err := d.db.Exec(query, status, hubID)
 	if err != nil {
 		return fmt.Errorf("failed to update hub status: %w", err)
 	}
+	
+	// Check if any rows were actually updated
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	
+	if rowsAffected == 0 {
+		return fmt.Errorf("hub with id %s not found in database", hubID)
+	}
+	
 	return nil
 }
 
@@ -343,12 +372,13 @@ func (d *Database) CreateDevice(hubID int, deviceID, deviceType, name, model, ad
 		return nil, fmt.Errorf("failed to marshal capabilities: %w", err)
 	}
 
-	query := `INSERT INTO devices (hub_id, device_id, device_type, name, model, address, capabilities) 
+	// Use INSERT OR REPLACE to handle device re-registration on hub reconnection
+	query := `INSERT OR REPLACE INTO devices (hub_id, device_id, device_type, name, model, address, capabilities) 
 			  VALUES (?, ?, ?, ?, ?, ?, ?)`
 	
 	result, err := d.db.Exec(query, hubID, deviceID, deviceType, name, model, address, string(capabilitiesJSON))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create device: %w", err)
+		return nil, fmt.Errorf("failed to create/update device: %w", err)
 	}
 
 	id, err := result.LastInsertId()

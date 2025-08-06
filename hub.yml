@@ -1,11 +1,11 @@
 gateway:
     endpoint: tcp://localhost:5555
-    public_key: uEuS++YrpR6:!oT<J*@!n@5!THXu%{o5eeNahQUP
+    public_key: 3d6WtXG%#A-$+/QwSwYj*066x0U:i)N6xL>zWKq?
 hub:
-    id: hub_bd52e0cc-3365-48ef-87ba-8d11b7266fdd
-    public_key: 6T/n<d(tQV(6pw2KlGJMHJ$Ac4$nR)<*Zd34*QPQ
-    private_key: (k<B%di7h:lt?nbT@S?rwk:3ad]AY)39V&*Bd@*b
-    product_key: 4cc57800-d137-4101-a5f6-03b537d9a81a
+    id: hub_1e598eca-384e-4421-aaac-3c94c70123ec
+    public_key: hf#]mjr0v.dX}lxua+WeKwjJImDv+soq9<TE&2[c
+    private_key: ZPZwEO/aq=EZ?CiR%1J1C=KZ1.gc?S]n942-)?1h
+    product_key: 891b9e39-29c8-4e3e-abf3-1503626d71a0
 devices:
     - id: living_room_tv
       type: bravia

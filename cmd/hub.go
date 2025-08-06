@@ -75,20 +75,32 @@ The hub provides secure, centralized device control and management.`,
 			cmd.Printf("\n")
 			
 			// Offer interactive registration
+			registrationSuccess := false
 			if promptForRegistration() {
 				gatewayURL := promptGatewayURL()
 				if gatewayURL != "" {
 					performInteractiveRegistration(config, gatewayURL)
-					cmd.Printf("\n🚀 Hub is ready! Start with: lucas hub --config %s\n", hubConfigPath)
+					registrationSuccess = true
+					cmd.Printf("\n🚀 Registration complete! Starting hub daemon...\n")
 				} else {
 					cmd.Printf("⚠ Registration cancelled\n")
 					showManualSteps(cmd, hubConfigPath)
+					return nil
 				}
 			} else {
 				showManualSteps(cmd, hubConfigPath)
+				return nil
 			}
 			
-			return nil
+			// If registration was successful, reload the config with gateway info and continue
+			if registrationSuccess {
+				// Reload config to get updated gateway information
+				config, err = hub.LoadConfig(hubConfigPath)
+				if err != nil {
+					log.Error().Err(err).Msg("Failed to reload configuration after registration")
+					return fmt.Errorf("failed to reload configuration after registration: %w", err)
+				}
+			}
 		}
 
 		// Create and start daemon

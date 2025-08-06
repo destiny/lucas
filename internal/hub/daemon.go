@@ -78,8 +78,8 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to initialize devices: %w", err)
 	}
 
-	// Connect to gateway
-	if err := d.gatewayClient.Connect(); err != nil {
+	// Connect to gateway with retry logic for internet reliability
+	if err := d.gatewayClient.ConnectWithRetry(); err != nil {
 		return fmt.Errorf("failed to connect to gateway: %w", err)
 	}
 

@@ -255,7 +255,7 @@ func (api *APIServer) handleHubClaim(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if hub is already claimed
-	if hub.UserID != 0 && !hub.AutoRegistered {
+	if hub.UserID.Valid && hub.UserID.Int32 != 0 && !hub.AutoRegistered {
 		api.sendError(w, http.StatusConflict, "Hub is already claimed by another user")
 		return
 	}
@@ -403,7 +403,7 @@ func (api *APIServer) handleDeviceAction(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Verify device belongs to user
-	if deviceHub.UserID != userID {
+	if !deviceHub.UserID.Valid || int(deviceHub.UserID.Int32) != userID {
 		api.sendError(w, http.StatusForbidden, "Device not accessible by user")
 		return
 	}
