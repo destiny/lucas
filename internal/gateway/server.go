@@ -14,12 +14,12 @@ import (
 
 // HubConnection represents an active connection to a hub
 type HubConnection struct {
-	HubID      string
-	Identity   string // ZMQ identity
-	PublicKey  string
-	LastPing   time.Time
-	Status     string
-	UserID     int
+	HubID     string
+	Identity  string // ZMQ identity
+	PublicKey string
+	LastPing  time.Time
+	Status    string
+	UserID    int
 }
 
 // ZMQServer handles ZMQ ROUTER communication with hubs
@@ -39,7 +39,7 @@ type ZMQServer struct {
 // NewZMQServer creates a new ZMQ server for hub communication
 func NewZMQServer(address string, keys *GatewayKeys, database *Database) *ZMQServer {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	return &ZMQServer{
 		address:     address,
 		keys:        keys,
@@ -66,11 +66,11 @@ func (s *ZMQServer) Start() error {
 	// Configure CurveZMQ server (temporarily disabled for testing)
 	// TODO: Re-enable after basic communication is verified
 	/*
-	err = socket.ServerAuthCurve("*", s.keys.GetServerPrivateKey())
-	if err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to configure CurveZMQ server: %w", err)
-	}
+		err = socket.ServerAuthCurve("*", s.keys.GetServerPrivateKey())
+		if err != nil {
+			socket.Close()
+			return fmt.Errorf("failed to configure CurveZMQ server: %w", err)
+		}
 	*/
 	s.logger.Info().Msg("CurveZMQ disabled for testing - using plain socket")
 
@@ -117,7 +117,7 @@ func (s *ZMQServer) Stop() error {
 	}
 
 	s.logger.Info().Msg("Stopping ZMQ server")
-	
+
 	s.running = false
 	s.cancel()
 
@@ -155,7 +155,7 @@ func (s *ZMQServer) messageLoop() {
 
 		// First part is the identity, second part is the actual message
 		identity := string(msg[0])
-		messageData := msg[1]
+		messageData := msg[2]
 
 		s.logger.Debug().
 			Str("identity", identity).
@@ -188,7 +188,7 @@ func (s *ZMQServer) messageLoop() {
 
 		// Process message
 		response := s.processMessage(identity, messageData)
-		
+
 		// Send response back to hub
 		if err := s.sendResponse(identity, response); err != nil {
 			s.logger.Error().
@@ -270,10 +270,10 @@ func (s *ZMQServer) handleHubOnline(identity string, message map[string]interfac
 	// Store connection info
 	s.mutex.Lock()
 	s.connections[identity] = &HubConnection{
-		HubID:     hubID,
-		Identity:  identity,
-		LastPing:  time.Now(),
-		Status:    "online",
+		HubID:    hubID,
+		Identity: identity,
+		LastPing: time.Now(),
+		Status:   "online",
 	}
 	s.mutex.Unlock()
 
@@ -450,10 +450,10 @@ func (s *ZMQServer) checkConnectionTimeouts() {
 				Str("identity", identity).
 				Str("hub_id", conn.HubID).
 				Msg("Hub connection timed out")
-			
+
 			// Update database status
 			s.database.UpdateHubStatus(conn.HubID, "offline")
-			
+
 			// Remove from active connections
 			delete(s.connections, identity)
 		}
@@ -540,4 +540,3 @@ func min(a, b int) int {
 	}
 	return b
 }
-
