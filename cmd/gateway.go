@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"lucas/internal/gateway"
@@ -19,6 +23,7 @@ var (
 	gatewayZMQAddr    string
 	gatewayAPIAddr    string
 	gatewayDebugFlag  bool
+	gatewayVerboseStatus bool
 )
 
 var gatewayCmd = &cobra.Command{
@@ -208,10 +213,7 @@ var gatewayStatusCmd = &cobra.Command{
 	Short: "Check gateway daemon status",
 	Long:  `Check the status of the running gateway daemon via HTTP API.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// This would make an HTTP request to the gateway API
-		cmd.Printf("Gateway status checking via API: %s\n", gatewayAPIAddr)
-		cmd.Println("Not yet implemented - would check /api/v1/gateway/status")
-		return nil
+		return checkGatewayStatus(cmd)
 	},
 }
 
@@ -351,6 +353,196 @@ func setupLogging(config *gateway.GatewayConfig) {
 	// Additional logging setup could be done here based on config.Logging.Format, etc.
 }
 
+// GatewayStatusResponse represents the structure returned by /api/v1/gateway/status
+type GatewayStatusResponse struct {
+	Status         string                 `json:"status"`
+	ActiveHubs     int                    `json:"active_hubs"`
+	HubConnections map[string]interface{} `json:"hub_connections"`
+	Uptime         string                 `json:"uptime"`
+	Version        string                 `json:"version"`
+	Timestamp      string                 `json:"timestamp"`
+}
+
+// GatewayHealthResponse represents the structure returned by /api/v1/health
+type GatewayHealthResponse struct {
+	Status     string            `json:"status"`
+	Components map[string]string `json:"components"`
+	Timestamp  string            `json:"timestamp"`
+}
+
+// checkGatewayStatus checks the status of the running gateway daemon
+func checkGatewayStatus(cmd *cobra.Command) error {
+	// Load configuration to determine API address
+	config, configPath, err := loadGatewayConfigurationForStatus()
+	if err != nil {
+		cmd.Printf("⚠ Warning: Could not load configuration: %v\n", err)
+		cmd.Printf("Using default settings\n\n")
+		config = gateway.NewDefaultGatewayConfig()
+		configPath = "gateway.yml (default)"
+	}
+
+	apiAddr := config.Server.API.Address
+	if !strings.HasPrefix(apiAddr, "http://") && !strings.HasPrefix(apiAddr, "https://") {
+		apiAddr = "http://localhost" + apiAddr
+	}
+
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	// Try to get gateway status
+	statusURL := apiAddr + "/api/v1/gateway/status"
+	healthURL := apiAddr + "/api/v1/health"
+	
+	statusResp, statusErr := makeHTTPRequest(client, statusURL)
+	healthResp, healthErr := makeHTTPRequest(client, healthURL)
+
+	if gatewayVerboseStatus {
+		return displayVerboseStatus(cmd, config, configPath, statusResp, healthResp, statusErr, healthErr)
+	} else {
+		return displayCompactStatus(cmd, config, configPath, statusResp, healthResp, statusErr, healthErr)
+	}
+}
+
+// loadGatewayConfigurationForStatus loads configuration for status checking with error handling
+func loadGatewayConfigurationForStatus() (*gateway.GatewayConfig, string, error) {
+	var config *gateway.GatewayConfig
+	var err error
+	var configPath string = gatewayConfigPath
+
+	// Use default config path if not specified
+	if configPath == "" {
+		configPath = "gateway.yml"
+	}
+
+	// Try to load configuration file
+	if _, statErr := os.Stat(configPath); statErr == nil {
+		config, err = gateway.LoadGatewayConfig(configPath)
+		if err != nil {
+			return nil, configPath, fmt.Errorf("failed to load config file: %w", err)
+		}
+	} else if !os.IsNotExist(statErr) {
+		return nil, configPath, fmt.Errorf("failed to check config file: %w", statErr)
+	} else {
+		// Config file doesn't exist, use defaults
+		config = gateway.NewDefaultGatewayConfig()
+		configPath = "gateway.yml (not found, using defaults)"
+	}
+
+	// Apply CLI flag overrides
+	if gatewayAPIAddr != "" {
+		config.Server.API.Address = gatewayAPIAddr
+		configPath += " (with CLI overrides)"
+	}
+
+	return config, configPath, nil
+}
+
+// makeHTTPRequest makes an HTTP GET request and returns the response body
+func makeHTTPRequest(client *http.Client, url string) (map[string]interface{}, error) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("connection failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return result, nil
+}
+
+// displayCompactStatus displays a user-friendly compact status
+func displayCompactStatus(cmd *cobra.Command, config *gateway.GatewayConfig, configPath string, statusResp, healthResp map[string]interface{}, statusErr, healthErr error) error {
+	// Determine overall status
+	isOnline := statusErr == nil && healthErr == nil
+	
+	if isOnline {
+		cmd.Printf("Gateway Status: ✓ RUNNING\n")
+	} else {
+		cmd.Printf("Gateway Status: ✗ OFFLINE\n")
+		if statusErr != nil {
+			cmd.Printf("Connection Error: %v\n", statusErr)
+		}
+		return nil
+	}
+
+	// Display basic information
+	apiAddr := config.Server.API.Address
+	if !strings.HasPrefix(apiAddr, "http://") && !strings.HasPrefix(apiAddr, "https://") {
+		apiAddr = "localhost" + apiAddr
+	}
+	cmd.Printf("API Address: %s\n", apiAddr)
+	cmd.Printf("ZMQ Address: %s\n", config.Server.ZMQ.Address)
+	cmd.Printf("Configuration: %s\n", configPath)
+
+	// Display status details if available
+	if statusResp != nil {
+		if activeHubs, ok := statusResp["active_hubs"].(float64); ok {
+			cmd.Printf("Active Hubs: %.0f\n", activeHubs)
+		}
+		if version, ok := statusResp["version"].(string); ok {
+			cmd.Printf("Version: %s\n", version)
+		}
+		if uptime, ok := statusResp["uptime"].(string); ok && uptime != "N/A" {
+			cmd.Printf("Uptime: %s\n", uptime)
+		}
+	}
+
+	// Display health information
+	if healthResp != nil {
+		if components, ok := healthResp["components"].(map[string]interface{}); ok {
+			for component, status := range components {
+				if statusStr, ok := status.(string); ok {
+					icon := "✓"
+					if statusStr != "healthy" {
+						icon = "✗"
+					}
+					cmd.Printf("%s: %s %s\n", strings.Title(component), icon, strings.Title(statusStr))
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// displayVerboseStatus displays detailed JSON status information
+func displayVerboseStatus(cmd *cobra.Command, config *gateway.GatewayConfig, configPath string, statusResp, healthResp map[string]interface{}, statusErr, healthErr error) error {
+	result := map[string]interface{}{
+		"online": statusErr == nil && healthErr == nil,
+		"config": map[string]interface{}{
+			"file":        configPath,
+			"api_address": config.Server.API.Address,
+			"zmq_address": config.Server.ZMQ.Address,
+		},
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	if statusErr != nil {
+		result["status_error"] = statusErr.Error()
+	} else {
+		result["status"] = statusResp
+	}
+
+	if healthErr != nil {
+		result["health_error"] = healthErr.Error()
+	} else {
+		result["health"] = healthResp
+	}
+
+	encoder := json.NewEncoder(cmd.OutOrStdout())
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(result)
+}
+
 func init() {
 	// Main gateway command flags
 	gatewayCmd.Flags().StringVarP(&gatewayConfigPath, "config", "c", "gateway.yml", "Path to configuration file")
@@ -364,6 +556,11 @@ func init() {
 	gatewayCmd.AddCommand(gatewayKeysCmd)
 	gatewayCmd.AddCommand(gatewayStatusCmd)
 	gatewayCmd.AddCommand(gatewayInitCmd)
+
+	// Status command flags
+	gatewayStatusCmd.Flags().BoolVarP(&gatewayVerboseStatus, "verbose", "v", false, "Show detailed status information in JSON format")
+	gatewayStatusCmd.Flags().StringVarP(&gatewayConfigPath, "config", "c", "gateway.yml", "Path to configuration file")
+	gatewayStatusCmd.Flags().StringVar(&gatewayAPIAddr, "api-addr", "", "API server address to check (overrides config)")
 
 	// Keys subcommands
 	gatewayKeysCmd.AddCommand(gatewayKeysGenerateCmd)
