@@ -1,0 +1,17 @@
+gateway:
+    endpoint: tcp://gateway.example.com:5555
+    public_key: gateway_public_key_here
+hub:
+    public_key: hub_public_key_here
+    private_key: hub_private_key_here
+devices:
+    - id: living_room_tv
+      type: bravia
+      model: Sony Bravia
+      address: 192.168.1.100
+      credential: psk_key_here
+      capabilities:
+        - remote_control
+        - system_control
+        - audio_control
+        - content_control

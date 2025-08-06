@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbletea"
@@ -109,7 +108,7 @@ func (m DeviceConfigModel) Update(msg tea.Msg) (DeviceConfigModel, tea.Cmd) {
 			return m.handleEnter()
 
 		case "tab", "shift+tab":
-			return m.handleTabNavigation(msg.String() == "shift+tab"), nil
+			return m.handleTabNavigation(msg.String() == "shift+tab")
 
 		case "up":
 			return m.handleUp(), nil
@@ -137,27 +136,27 @@ func (m DeviceConfigModel) Update(msg tea.Msg) (DeviceConfigModel, tea.Cmd) {
 
 		case "a":
 			if !m.editMode && !m.addMode {
-				return m.startAddMode(), nil
+				return m.startAddMode()
 			}
-			return m.handleTextInput("a"), nil
+			return m.handleTextInput("a")
 
 		case "e":
 			if !m.editMode && !m.addMode && len(m.devices) > 0 {
-				return m.startEditMode(), nil
+				return m.startEditMode()
 			}
-			return m.handleTextInput("e"), nil
+			return m.handleTextInput("e")
 
 		case "d":
 			if !m.editMode && !m.addMode && len(m.devices) > 0 {
-				return m.deleteDevice(), nil
+				return m.deleteDevice()
 			}
-			return m.handleTextInput("d"), nil
+			return m.handleTextInput("d")
 
 		case "t":
 			if !m.editMode && !m.addMode && len(m.devices) > 0 {
-				return m.testDevice(), nil
+				return m.testDevice()
 			}
-			return m.handleTextInput("t"), nil
+			return m.handleTextInput("t")
 
 		case "r":
 			if !m.editMode && !m.addMode {
@@ -165,11 +164,11 @@ func (m DeviceConfigModel) Update(msg tea.Msg) (DeviceConfigModel, tea.Cmd) {
 				m.successMessage = "Devices reloaded"
 				return m, nil
 			}
-			return m.handleTextInput("r"), nil
+			return m.handleTextInput("r")
 
 		default:
 			if m.editMode || m.addMode {
-				return m.handleTextInput(msg.String()), nil
+				return m.handleTextInput(msg.String())
 			}
 		}
 	}
@@ -377,16 +376,16 @@ func (m DeviceConfigModel) handleEnter() (DeviceConfigModel, tea.Cmd) {
 	if m.editMode || m.addMode {
 		switch m.focusedField {
 		case deviceConfigFieldSave:
-			return m.saveDevice(), nil
+			return m.saveDevice()
 		case deviceConfigFieldTest:
-			return m.testDevice(), nil
+			return m.testDevice()
 		case deviceConfigFieldCancel:
 			return m.exitEditMode(), nil
 		}
 	} else {
 		// In list mode, enter starts edit
 		if len(m.devices) > 0 {
-			return m.startEditMode(), nil
+			return m.startEditMode()
 		}
 	}
 	return m, nil

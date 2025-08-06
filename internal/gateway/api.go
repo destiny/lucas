@@ -58,7 +58,7 @@ func (api *APIServer) Start(address string) error {
 	apiRouter.HandleFunc("/admin/devices", api.handleListDevices).Methods("GET")
 
 	// Health check
-	router.HandleFunc("/health", api.handleHealth).Methods("GET")
+	apiRouter.HandleFunc("/health", api.handleHealth).Methods("GET")
 
 	api.server = &http.Server{
 		Addr:         address,

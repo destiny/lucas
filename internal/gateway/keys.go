@@ -6,19 +6,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/pebbe/zmq4"
+	"gopkg.in/yaml.v3"
 )
 
 // KeyPair represents a CurveZMQ key pair
 type KeyPair struct {
-	PublicKey  string `json:"public_key"`
-	PrivateKey string `json:"private_key"`
+	PublicKey  string `json:"public_key" yaml:"public_key"`
+	PrivateKey string `json:"private_key" yaml:"private_key"`
 }
 
 // GatewayKeys holds all gateway cryptographic keys
 type GatewayKeys struct {
-	Server KeyPair `json:"server"`
+	Server KeyPair `json:"server" yaml:"server"`
 }
 
 // GenerateKeyPair generates a new CurveZMQ key pair
@@ -64,7 +67,7 @@ func LoadOrGenerateGatewayKeys(keyFile string) (*GatewayKeys, error) {
 		Server: *serverKeyPair,
 	}
 
-	// Save keys to file
+	// Save keys to file using format based on file extension
 	if err := SaveGatewayKeys(keys, keyFile); err != nil {
 		return nil, fmt.Errorf("failed to save keys: %w", err)
 	}
@@ -72,7 +75,7 @@ func LoadOrGenerateGatewayKeys(keyFile string) (*GatewayKeys, error) {
 	return keys, nil
 }
 
-// LoadGatewayKeys loads gateway keys from a JSON file
+// LoadGatewayKeys loads gateway keys from a JSON or YAML file (auto-detects format)
 func LoadGatewayKeys(keyFile string) (*GatewayKeys, error) {
 	data, err := os.ReadFile(keyFile)
 	if err != nil {
@@ -80,8 +83,16 @@ func LoadGatewayKeys(keyFile string) (*GatewayKeys, error) {
 	}
 
 	var keys GatewayKeys
-	if err := json.Unmarshal(data, &keys); err != nil {
-		return nil, fmt.Errorf("failed to parse key file: %w", err)
+	
+	// Determine format based on file extension or content
+	if isYAMLFormat(keyFile, data) {
+		if err := yaml.Unmarshal(data, &keys); err != nil {
+			return nil, fmt.Errorf("failed to parse YAML key file: %w", err)
+		}
+	} else {
+		if err := json.Unmarshal(data, &keys); err != nil {
+			return nil, fmt.Errorf("failed to parse JSON key file: %w", err)
+		}
 	}
 
 	// Validate key format
@@ -92,11 +103,22 @@ func LoadGatewayKeys(keyFile string) (*GatewayKeys, error) {
 	return &keys, nil
 }
 
-// SaveGatewayKeys saves gateway keys to a JSON file
+// SaveGatewayKeys saves gateway keys to a JSON or YAML file (format determined by extension)
 func SaveGatewayKeys(keys *GatewayKeys, keyFile string) error {
-	data, err := json.MarshalIndent(keys, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal keys: %w", err)
+	var data []byte
+	var err error
+	
+	// Determine format based on file extension
+	if isYAMLExtension(keyFile) {
+		data, err = yaml.Marshal(keys)
+		if err != nil {
+			return fmt.Errorf("failed to marshal keys as YAML: %w", err)
+		}
+	} else {
+		data, err = json.MarshalIndent(keys, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal keys as JSON: %w", err)
+		}
 	}
 
 	// Write with restricted permissions (600 - owner read/write only)
@@ -231,4 +253,39 @@ func (gk *GatewayKeys) GetSecurityInfo() SecurityInfo {
 		Curve:       "Curve25519",
 		KeyLength:   40, // Z85 encoded length
 	}
+}
+
+// isYAMLExtension checks if the file extension indicates YAML format
+func isYAMLExtension(filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	return ext == ".yml" || ext == ".yaml"
+}
+
+// isYAMLFormat determines if the file should be parsed as YAML
+func isYAMLFormat(filename string, content []byte) bool {
+	// First check the file extension
+	if isYAMLExtension(filename) {
+		return true
+	}
+	
+	// For files without clear extensions, try to detect based on content
+	// YAML typically starts with keys without quotes, JSON starts with {
+	contentStr := strings.TrimSpace(string(content))
+	if strings.HasPrefix(contentStr, "{") {
+		return false // Likely JSON
+	}
+	
+	// If it contains lines with key: value pattern, likely YAML
+	lines := strings.Split(contentStr, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			if strings.Contains(line, ":") && !strings.HasPrefix(line, "\"") {
+				return true // Likely YAML
+			}
+			break
+		}
+	}
+	
+	return false // Default to JSON
 }

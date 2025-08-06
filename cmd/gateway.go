@@ -13,6 +13,7 @@ import (
 )
 
 var (
+	gatewayConfigPath string
 	gatewayDBPath     string
 	gatewayKeysPath   string
 	gatewayZMQAddr    string
@@ -27,26 +28,27 @@ var gatewayCmd = &cobra.Command{
 It handles hub registration, device management, and secure communication with hubs via ZMQ.
 The gateway provides a central point for managing distributed IoT devices across multiple locations.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Set up logging
-		if gatewayDebugFlag {
-			logger.SetSilentMode(false)
-			logger.SetLevel("debug")
-		} else {
-			logger.SetSilentMode(false)
-			logger.SetLevel("info")
+		// Load configuration
+		config, err := loadGatewayConfiguration()
+		if err != nil {
+			return fmt.Errorf("failed to load configuration: %w", err)
 		}
+
+		// Set up logging based on configuration
+		setupLogging(config)
 
 		log := logger.New()
 		log.Info().
-			Str("db_path", gatewayDBPath).
-			Str("keys_path", gatewayKeysPath).
-			Str("zmq_address", gatewayZMQAddr).
-			Str("api_address", gatewayAPIAddr).
-			Bool("debug", gatewayDebugFlag).
+			Str("config_file", gatewayConfigPath).
+			Str("db_path", config.Database.Path).
+			Str("keys_path", config.Keys.File).
+			Str("zmq_address", config.Server.ZMQ.Address).
+			Str("api_address", config.Server.API.Address).
+			Str("log_level", config.Logging.Level).
 			Msg("Starting Lucas Gateway daemon")
 
 		// Initialize database
-		database, err := gateway.NewDatabase(gatewayDBPath)
+		database, err := gateway.NewDatabase(config.Database.Path)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to initialize database")
 			return fmt.Errorf("failed to initialize database: %w", err)
@@ -54,7 +56,7 @@ The gateway provides a central point for managing distributed IoT devices across
 		defer database.Close()
 
 		// Load or generate keys
-		keys, err := gateway.LoadOrGenerateGatewayKeys(gatewayKeysPath)
+		keys, err := gateway.LoadOrGenerateGatewayKeys(config.Keys.File)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to load gateway keys")
 			return fmt.Errorf("failed to load gateway keys: %w", err)
@@ -65,7 +67,7 @@ The gateway provides a central point for managing distributed IoT devices across
 			Msg("Gateway keys loaded")
 
 		// Initialize ZMQ server
-		zmqServer := gateway.NewZMQServer(gatewayZMQAddr, keys, database)
+		zmqServer := gateway.NewZMQServer(config.Server.ZMQ.Address, keys, database)
 
 		// Initialize API server
 		apiServer := gateway.NewAPIServer(database, zmqServer)
@@ -87,7 +89,7 @@ The gateway provides a central point for managing distributed IoT devices across
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := apiServer.Start(gatewayAPIAddr); err != nil {
+			if err := apiServer.Start(config.Server.API.Address); err != nil {
 				errChan <- fmt.Errorf("API server error: %w", err)
 			}
 		}()
@@ -216,30 +218,64 @@ var gatewayStatusCmd = &cobra.Command{
 var gatewayInitCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize gateway with default configuration",
-	Long:  `Initialize the gateway by creating default database and generating keys.`,
+	Long:  `Initialize the gateway by creating default configuration file, database and generating keys.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.Printf("Initializing gateway...\n")
 
+		// Use provided config path or default
+		configPath := gatewayConfigPath
+		if configPath == "" {
+			configPath = "gateway.yml"
+		}
+
+		// Create default configuration if it doesn't exist
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			cmd.Printf("Creating default configuration: %s\n", configPath)
+			config := gateway.NewDefaultGatewayConfig()
+			
+			if err := gateway.SaveGatewayConfig(config, configPath); err != nil {
+				return fmt.Errorf("failed to save config file: %w", err)
+			}
+			
+			cmd.Printf("✓ Configuration file created: %s\n", configPath)
+		} else {
+			cmd.Printf("✓ Configuration file already exists: %s\n", configPath)
+		}
+
+		// Load configuration to use for initialization
+		config, err := gateway.LoadGatewayConfig(configPath)
+		if err != nil {
+			return fmt.Errorf("failed to load configuration: %w", err)
+		}
+
+		// Apply CLI overrides for init
+		if gatewayDBPath != "" {
+			config.Database.Path = gatewayDBPath
+		}
+		if gatewayKeysPath != "" {
+			config.Keys.File = gatewayKeysPath
+		}
+
 		// Generate keys if they don't exist
-		if _, err := os.Stat(gatewayKeysPath); os.IsNotExist(err) {
-			cmd.Printf("Generating gateway keys: %s\n", gatewayKeysPath)
+		if _, err := os.Stat(config.Keys.File); os.IsNotExist(err) {
+			cmd.Printf("Generating gateway keys: %s\n", config.Keys.File)
 			keys, err := gateway.CreateDefaultGatewayKeys()
 			if err != nil {
 				return fmt.Errorf("failed to generate keys: %w", err)
 			}
 
-			if err := gateway.SaveGatewayKeys(keys, gatewayKeysPath); err != nil {
+			if err := gateway.SaveGatewayKeys(keys, config.Keys.File); err != nil {
 				return fmt.Errorf("failed to save keys: %w", err)
 			}
 
 			cmd.Printf("✓ Keys generated: %s\n", keys.GetServerPublicKey())
 		} else {
-			cmd.Printf("✓ Keys already exist: %s\n", gatewayKeysPath)
+			cmd.Printf("✓ Keys already exist: %s\n", config.Keys.File)
 		}
 
 		// Initialize database
-		cmd.Printf("Initializing database: %s\n", gatewayDBPath)
-		database, err := gateway.NewDatabase(gatewayDBPath)
+		cmd.Printf("Initializing database: %s\n", config.Database.Path)
+		database, err := gateway.NewDatabase(config.Database.Path)
 		if err != nil {
 			return fmt.Errorf("failed to initialize database: %w", err)
 		}
@@ -255,21 +291,74 @@ var gatewayInitCmd = &cobra.Command{
 		}
 
 		cmd.Printf("\n✅ Gateway initialization complete!\n")
-		cmd.Printf("Start the gateway with: lucas gateway\n")
-		cmd.Printf("ZMQ Address: %s\n", gatewayZMQAddr)
-		cmd.Printf("API Address: %s\n", gatewayAPIAddr)
+		cmd.Printf("Configuration: %s\n", configPath)
+		cmd.Printf("Start the gateway with: lucas gateway -c %s\n", configPath)
+		cmd.Printf("ZMQ Address: %s\n", config.Server.ZMQ.Address)
+		cmd.Printf("API Address: %s\n", config.Server.API.Address)
+		cmd.Printf("Health endpoint: http://localhost%s/api/v1/health\n", config.Server.API.Address)
 
 		return nil
 	},
 }
 
+// loadGatewayConfiguration loads configuration from file and applies CLI flag overrides
+func loadGatewayConfiguration() (*gateway.GatewayConfig, error) {
+	var config *gateway.GatewayConfig
+	var err error
+
+	// Try to load configuration file
+	if gatewayConfigPath != "" {
+		if _, statErr := os.Stat(gatewayConfigPath); statErr == nil {
+			config, err = gateway.LoadGatewayConfig(gatewayConfigPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load config file: %w", err)
+			}
+		} else if !os.IsNotExist(statErr) {
+			return nil, fmt.Errorf("failed to check config file: %w", statErr)
+		}
+	}
+
+	// If no config file or config file doesn't exist, use defaults
+	if config == nil {
+		config = gateway.NewDefaultGatewayConfig()
+	}
+
+	// Apply CLI flag overrides (if flags were explicitly set)
+	if gatewayDBPath != "" {
+		config.Database.Path = gatewayDBPath
+	}
+	if gatewayKeysPath != "" {
+		config.Keys.File = gatewayKeysPath
+	}
+	if gatewayZMQAddr != "" {
+		config.Server.ZMQ.Address = gatewayZMQAddr
+	}
+	if gatewayAPIAddr != "" {
+		config.Server.API.Address = gatewayAPIAddr
+	}
+	if gatewayDebugFlag {
+		config.Logging.Level = "debug"
+	}
+
+	return config, nil
+}
+
+// setupLogging configures the logger based on configuration
+func setupLogging(config *gateway.GatewayConfig) {
+	logger.SetSilentMode(false)
+	logger.SetLevel(config.Logging.Level)
+	
+	// Additional logging setup could be done here based on config.Logging.Format, etc.
+}
+
 func init() {
 	// Main gateway command flags
-	gatewayCmd.Flags().StringVar(&gatewayDBPath, "db", "gateway.db", "Path to SQLite database file")
-	gatewayCmd.Flags().StringVar(&gatewayKeysPath, "keys", "gateway_keys.json", "Path to gateway keys file")
-	gatewayCmd.Flags().StringVar(&gatewayZMQAddr, "zmq-addr", "tcp://*:5555", "ZMQ server bind address")
-	gatewayCmd.Flags().StringVar(&gatewayAPIAddr, "api-addr", ":8080", "HTTP API server address")
-	gatewayCmd.Flags().BoolVarP(&gatewayDebugFlag, "debug", "d", false, "Enable debug logging")
+	gatewayCmd.Flags().StringVarP(&gatewayConfigPath, "config", "c", "gateway.yml", "Path to configuration file")
+	gatewayCmd.Flags().StringVar(&gatewayDBPath, "db", "", "Path to SQLite database file (overrides config)")
+	gatewayCmd.Flags().StringVar(&gatewayKeysPath, "keys", "", "Path to gateway keys file (overrides config)")
+	gatewayCmd.Flags().StringVar(&gatewayZMQAddr, "zmq-addr", "", "ZMQ server bind address (overrides config)")
+	gatewayCmd.Flags().StringVar(&gatewayAPIAddr, "api-addr", "", "HTTP API server address (overrides config)")
+	gatewayCmd.Flags().BoolVarP(&gatewayDebugFlag, "debug", "d", false, "Enable debug logging (overrides config)")
 
 	// Add subcommands
 	gatewayCmd.AddCommand(gatewayKeysCmd)
@@ -280,9 +369,9 @@ func init() {
 	gatewayKeysCmd.AddCommand(gatewayKeysGenerateCmd)
 	gatewayKeysCmd.AddCommand(gatewayKeysShowCmd)
 
-	// Keys command flags
-	gatewayKeysGenerateCmd.Flags().StringVar(&gatewayKeysPath, "keys", "gateway_keys.json", "Path for generated keys file")
-	gatewayKeysShowCmd.Flags().StringVar(&gatewayKeysPath, "keys", "gateway_keys.json", "Path to keys file")
+	// Keys command flags (these still use the old defaults for backward compatibility)
+	gatewayKeysGenerateCmd.Flags().StringVar(&gatewayKeysPath, "keys", "gateway_keys.yml", "Path for generated keys file")
+	gatewayKeysShowCmd.Flags().StringVar(&gatewayKeysPath, "keys", "gateway_keys.yml", "Path to keys file")
 
 	// Add to root command
 	rootCmd.AddCommand(gatewayCmd)
