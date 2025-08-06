@@ -51,18 +51,22 @@ func (gc *GatewayClient) Connect() error {
 		Str("endpoint", gc.config.Gateway.Endpoint).
 		Msg("Connecting to gateway")
 
-	// Create REQ socket for request-reply pattern
+	// Create REQ socket for synchronous request-reply with ROUTER
 	socket, err := zmq4.NewSocket(zmq4.REQ)
 	if err != nil {
 		return fmt.Errorf("failed to create ZMQ socket: %w", err)
 	}
 
-	// Configure CurveZMQ client
+	// Configure CurveZMQ client (temporarily disabled for testing)
+	// TODO: Re-enable after basic communication is verified
+	/*
 	err = socket.ClientAuthCurve(gc.config.Gateway.PublicKey, gc.config.Hub.PublicKey, gc.config.Hub.PrivateKey)
 	if err != nil {
 		socket.Close()
 		return fmt.Errorf("failed to configure CurveZMQ client: %w", err)
 	}
+	*/
+	gc.logger.Info().Msg("CurveZMQ disabled for testing - using plain socket")
 
 	// Set socket options
 	err = socket.SetLinger(1000) // 1 second linger time
@@ -95,64 +99,49 @@ func (gc *GatewayClient) Connect() error {
 
 	gc.logger.Info().Msg("Successfully connected to gateway")
 
-	// Perform key exchange/registration
-	if err := gc.registerHub(); err != nil {
-		gc.Disconnect()
-		return fmt.Errorf("failed to register with gateway: %w", err)
-	}
-
 	return nil
 }
 
-// registerHub performs initial registration/key exchange with the gateway
-func (gc *GatewayClient) registerHub() error {
-	gc.logger.Info().Msg("Registering hub with gateway")
-
-	// Create registration message
-	regMessage := map[string]interface{}{
-		"type":      "register",
-		"hub_id":    "lucas_hub", // Could be configurable
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"public_key": gc.config.Hub.PublicKey,
+// PerformHandshake performs the ZMQ handshake sequence with the gateway
+func (gc *GatewayClient) PerformHandshake() error {
+	if !gc.connected {
+		return fmt.Errorf("not connected to gateway")
 	}
 
-	// Send registration message
-	regJSON, err := json.Marshal(regMessage)
-	if err != nil {
-		return fmt.Errorf("failed to marshal registration message: %w", err)
+	gc.logger.Info().Msg("Starting ZMQ handshake with gateway")
+
+	// Step 1: Send hub_online message and wait for response
+	if err := gc.SendHubOnline(); err != nil {
+		return fmt.Errorf("failed to send hub_online message: %w", err)
 	}
 
-	_, err = gc.socket.SendBytes(regJSON, 0)
-	if err != nil {
-		return fmt.Errorf("failed to send registration message: %w", err)
+	// Step 2: Send device list to gateway for registration and wait for response
+	if err := gc.registerDevices(); err != nil {
+		return fmt.Errorf("failed to register devices: %w", err)
 	}
 
-	// Wait for response
-	response, err := gc.socket.RecvBytes(0)
-	if err != nil {
-		return fmt.Errorf("failed to receive registration response: %w", err)
-	}
+	gc.logger.Info().Msg("ZMQ handshake completed successfully")
+	return nil
+}
 
-	// Parse response
-	var regResponse map[string]interface{}
-	if err := json.Unmarshal(response, &regResponse); err != nil {
-		return fmt.Errorf("failed to parse registration response: %w", err)
-	}
-
-	// Check if registration was successful
-	if success, ok := regResponse["success"].(bool); !ok || !success {
-		errorMsg := "unknown error"
-		if errStr, ok := regResponse["error"].(string); ok {
-			errorMsg = errStr
+// registerDevices sends device list to gateway during handshake
+func (gc *GatewayClient) registerDevices() error {
+	// Convert devices from config to interface map for JSON serialization
+	devices := make(map[string]interface{})
+	for _, device := range gc.config.Devices {
+		devices[device.ID] = map[string]interface{}{
+			"id":           device.ID,
+			"type":         device.Type,
+			"model":        device.Model,
+			"address":      device.Address,
+			"capabilities": device.Capabilities,
 		}
-		return fmt.Errorf("registration failed: %s", errorMsg)
 	}
 
-	gc.logger.Info().Msg("Hub registration successful")
-	return nil
+	return gc.SendDeviceList(devices)
 }
 
-// Listen starts listening for messages from the gateway
+// Listen starts listening for messages from the gateway (device commands)
 func (gc *GatewayClient) Listen(messageHandler func(*GatewayMessage) *HubResponse) error {
 	if !gc.connected {
 		return fmt.Errorf("not connected to gateway")
@@ -161,29 +150,31 @@ func (gc *GatewayClient) Listen(messageHandler func(*GatewayMessage) *HubRespons
 	gc.logger.Info().Msg("Starting to listen for gateway messages")
 
 	for {
-		// Receive message from gateway
+		// Receive message from gateway - REQ socket gets single-part messages
 		msgBytes, err := gc.socket.RecvBytes(0)
 		if err != nil {
 			gc.logger.Error().Err(err).Msg("Failed to receive message from gateway")
 			continue
 		}
-
+		
 		gc.logger.Debug().
-			Bytes("message", msgBytes).
+			Int("message_size", len(msgBytes)).
+			Str("message_preview", gc.getMessagePreview(msgBytes)).
 			Msg("Received message from gateway")
 
-		// Parse message
+		// Parse as operational GatewayMessage (device commands)
 		var gatewayMsg GatewayMessage
 		if err := json.Unmarshal(msgBytes, &gatewayMsg); err != nil {
 			gc.logger.Error().
 				Err(err).
-				Bytes("message", msgBytes).
+				Int("message_size", len(msgBytes)).
+				Str("message_hex", fmt.Sprintf("%x", msgBytes[:min(50, len(msgBytes))])).
 				Msg("Failed to parse gateway message")
 			
 			// Send error response
 			errorResponse := &HubResponse{
 				ID:        "unknown",
-				Nonce:     "", // No nonce available if parsing failed
+				Nonce:     "", 
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 				Success:   false,
 				Error:     "Failed to parse message",
@@ -192,7 +183,7 @@ func (gc *GatewayClient) Listen(messageHandler func(*GatewayMessage) *HubRespons
 			continue
 		}
 
-		// Process message through handler
+		// Process operational message through handler
 		response := messageHandler(&gatewayMsg)
 		if response == nil {
 			response = &HubResponse{
@@ -268,7 +259,116 @@ func (gc *GatewayClient) IsConnected() bool {
 	return gc.connected
 }
 
-// Ping sends a ping message to test connectivity
+// SendHubOnline sends a message to the gateway indicating the hub is online and waits for response
+func (gc *GatewayClient) SendHubOnline() error {
+	if !gc.connected {
+		return fmt.Errorf("not connected to gateway")
+	}
+
+	onlineMessage := map[string]interface{}{
+		"type":      "hub_online",
+		"hub_id":    gc.config.Hub.ID,
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	onlineJSON, err := json.Marshal(onlineMessage)
+	if err != nil {
+		return fmt.Errorf("failed to marshal hub online message: %w", err)
+	}
+
+	gc.logger.Debug().
+		Str("hub_id", gc.config.Hub.ID).
+		Int("message_size", len(onlineJSON)).
+		Msg("Sending hub_online message")
+
+	_, err = gc.socket.SendBytes(onlineJSON, 0)
+	if err != nil {
+		return fmt.Errorf("failed to send hub online message: %w", err)
+	}
+
+	// Wait for gateway_ready response
+	response, err := gc.socket.RecvBytes(0)
+	if err != nil {
+		return fmt.Errorf("failed to receive gateway_ready response: %w", err)
+	}
+
+	var readyResponse map[string]interface{}
+	if err := json.Unmarshal(response, &readyResponse); err != nil {
+		gc.logger.Error().
+			Err(err).
+			Int("response_size", len(response)).
+			Str("response_hex", fmt.Sprintf("%x", response[:min(50, len(response))])).
+			Msg("Failed to parse gateway_ready response")
+		return fmt.Errorf("failed to parse gateway_ready response: %w", err)
+	}
+
+	if msgType, ok := readyResponse["type"].(string); !ok || msgType != "gateway_ready" {
+		return fmt.Errorf("unexpected response from gateway: %v", readyResponse)
+	}
+
+	gc.logger.Info().
+		Str("hub_id", gc.config.Hub.ID).
+		Msg("Gateway is ready")
+	return nil
+}
+
+// SendDeviceList sends the list of devices to the gateway and waits for response
+func (gc *GatewayClient) SendDeviceList(devices map[string]interface{}) error {
+	if !gc.connected {
+		return fmt.Errorf("not connected to gateway")
+	}
+
+	deviceListMessage := map[string]interface{}{
+		"type":      "device_list",
+		"hub_id":    gc.config.Hub.ID,
+		"devices":   devices,
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	deviceListJSON, err := json.Marshal(deviceListMessage)
+	if err != nil {
+		return fmt.Errorf("failed to marshal device list message: %w", err)
+	}
+
+	gc.logger.Debug().
+		Str("hub_id", gc.config.Hub.ID).
+		Int("device_count", len(devices)).
+		Int("message_size", len(deviceListJSON)).
+		Msg("Sending device_list message")
+
+	_, err = gc.socket.SendBytes(deviceListJSON, 0)
+	if err != nil {
+		return fmt.Errorf("failed to send device list message: %w", err)
+	}
+
+	// Wait for devices_registered response
+	response, err := gc.socket.RecvBytes(0)
+	if err != nil {
+		return fmt.Errorf("failed to receive devices_registered response: %w", err)
+	}
+
+	var registeredResponse map[string]interface{}
+	if err := json.Unmarshal(response, &registeredResponse); err != nil {
+		gc.logger.Error().
+			Err(err).
+			Int("response_size", len(response)).
+			Str("response_hex", fmt.Sprintf("%x", response[:min(50, len(response))])).
+			Msg("Failed to parse devices_registered response")
+		return fmt.Errorf("failed to parse devices_registered response: %w", err)
+	}
+
+	if msgType, ok := registeredResponse["type"].(string); !ok || msgType != "devices_registered" {
+		return fmt.Errorf("unexpected response from gateway: %v", registeredResponse)
+	}
+
+	gc.logger.Info().
+		Str("hub_id", gc.config.Hub.ID).
+		Int("device_count", len(devices)).
+		Msg("Devices registered successfully")
+	return nil
+}
+
+// Ping sends a ping message to test connectivity and waits for pong
 func (gc *GatewayClient) Ping() error {
 	if !gc.connected {
 		return fmt.Errorf("not connected to gateway")
@@ -276,6 +376,7 @@ func (gc *GatewayClient) Ping() error {
 
 	pingMessage := map[string]interface{}{
 		"type":      "ping",
+		"hub_id":    gc.config.Hub.ID,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -297,6 +398,11 @@ func (gc *GatewayClient) Ping() error {
 
 	var pongResponse map[string]interface{}
 	if err := json.Unmarshal(response, &pongResponse); err != nil {
+		gc.logger.Error().
+			Err(err).
+			Int("response_size", len(response)).
+			Str("response_hex", fmt.Sprintf("%x", response[:min(50, len(response))])).
+			Msg("Failed to parse pong response")
 		return fmt.Errorf("failed to parse pong response: %w", err)
 	}
 
@@ -306,4 +412,21 @@ func (gc *GatewayClient) Ping() error {
 
 	gc.logger.Debug().Msg("Ping successful")
 	return nil
+}
+
+// getMessagePreview returns a safe string preview of message data
+func (gc *GatewayClient) getMessagePreview(data []byte) string {
+	maxLen := 100
+	if len(data) > maxLen {
+		return string(data[:maxLen]) + "..."
+	}
+	return string(data)
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

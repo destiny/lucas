@@ -17,15 +17,17 @@ import (
 type APIServer struct {
 	database  *Database
 	zmqServer *ZMQServer
+	keys      *GatewayKeys
 	logger    zerolog.Logger
 	server    *http.Server
 }
 
 // NewAPIServer creates a new API server
-func NewAPIServer(database *Database, zmqServer *ZMQServer) *APIServer {
+func NewAPIServer(database *Database, zmqServer *ZMQServer, keys *GatewayKeys) *APIServer {
 	return &APIServer{
 		database:  database,
 		zmqServer: zmqServer,
+		keys:      keys,
 		logger:    logger.New(),
 	}
 }
@@ -45,6 +47,12 @@ func (api *APIServer) Start(address string) error {
 	apiRouter.HandleFunc("/gateway/status", api.handleGatewayStatus).Methods("GET")
 	apiRouter.HandleFunc("/gateway/keys/info", api.handleKeyInfo).Methods("GET")
 	apiRouter.HandleFunc("/gateway/connections", api.handleConnections).Methods("GET")
+
+	// Hub registration endpoint
+	apiRouter.HandleFunc("/hub/register", api.handleHubRegister).Methods("POST")
+	
+	// Hub claiming endpoint
+	apiRouter.HandleFunc("/hub/claim", api.handleHubClaim).Methods("POST")
 
 	// User endpoints
 	apiRouter.HandleFunc("/users", api.handleCreateUser).Methods("POST")
@@ -145,7 +153,7 @@ func (api *APIServer) handleGatewayStatus(w http.ResponseWriter, r *http.Request
 func (api *APIServer) handleKeyInfo(w http.ResponseWriter, r *http.Request) {
 	// This would normally require authentication
 	keyInfo := map[string]interface{}{
-		"public_key": "gateway_public_key_here", // Would get from actual keys
+		"public_key": api.keys.GetServerPublicKey(),
 		"key_type":   "curve25519",
 		"algorithm":  "CurveZMQ",
 	}
@@ -159,6 +167,142 @@ func (api *APIServer) handleConnections(w http.ResponseWriter, r *http.Request) 
 		"connections": connections,
 		"count":       len(connections),
 	})
+}
+
+func (api *APIServer) handleHubRegister(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		HubID      string `json:"hub_id"`
+		PublicKey  string `json:"public_key"`
+		Name       string `json:"name"`
+		ProductKey string `json:"product_key"`
+		Timestamp  string `json:"timestamp"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	// Validate required fields
+	if req.HubID == "" {
+		api.sendError(w, http.StatusBadRequest, "Hub ID is required")
+		return
+	}
+	if req.PublicKey == "" {
+		api.sendError(w, http.StatusBadRequest, "Public key is required")
+		return
+	}
+
+	// Validate public key format (CurveZMQ keys are 40 characters)
+	if len(req.PublicKey) != 40 {
+		api.sendError(w, http.StatusBadRequest, "Invalid public key format")
+		return
+	}
+
+	// Register hub in database
+	hub, err := api.database.RegisterHub(req.HubID, req.PublicKey, req.Name, req.ProductKey)
+	if err != nil {
+		api.logger.Error().
+			Str("hub_id", req.HubID).
+			Err(err).
+			Msg("Failed to register hub")
+		api.sendError(w, http.StatusInternalServerError, "Failed to register hub")
+		return
+	}
+
+	// Return success response with gateway information
+	response := map[string]interface{}{
+		"success":         true,
+		"message":         "Hub registered successfully",
+		"hub":             hub,
+		"gateway_info": map[string]interface{}{
+			"public_key":    api.keys.GetServerPublicKey(),
+			"zmq_endpoint":  "tcp://localhost:5555", // Should be configurable
+			"api_endpoint":  r.Host,
+		},
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	api.sendJSON(w, http.StatusCreated, response)
+}
+
+func (api *APIServer) handleHubClaim(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserID     int    `json:"user_id"`
+		ProductKey string `json:"product_key"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	// Validate required fields
+	if req.UserID == 0 {
+		api.sendError(w, http.StatusBadRequest, "User ID is required")
+		return
+	}
+	if req.ProductKey == "" {
+		api.sendError(w, http.StatusBadRequest, "Product key is required")
+		return
+	}
+
+	// Find hub by product key
+	hub, err := api.database.GetHubByProductKey(req.ProductKey)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, "Hub not found with provided product key")
+		return
+	}
+
+	// Check if hub is already claimed
+	if hub.UserID != 0 && !hub.AutoRegistered {
+		api.sendError(w, http.StatusConflict, "Hub is already claimed by another user")
+		return
+	}
+
+	// Verify user exists
+	user, err := api.database.GetUser(req.UserID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, "User not found")
+		return
+	}
+
+	// Claim the hub - update user_id and set auto_registered to false
+	if err := api.database.ClaimHub(hub.HubID, req.UserID); err != nil {
+		api.logger.Error().
+			Str("hub_id", hub.HubID).
+			Int("user_id", req.UserID).
+			Err(err).
+			Msg("Failed to claim hub")
+		api.sendError(w, http.StatusInternalServerError, "Failed to claim hub")
+		return
+	}
+
+	// Update devices to link to the user
+	if err := api.database.UpdateDevicesUserID(hub.ID, req.UserID); err != nil {
+		api.logger.Error().
+			Str("hub_id", hub.HubID).
+			Int("user_id", req.UserID).
+			Err(err).
+			Msg("Failed to update device ownership")
+		// Don't fail the request, just log the warning
+	}
+
+	api.logger.Info().
+		Str("hub_id", hub.HubID).
+		Int("user_id", req.UserID).
+		Str("username", user.Username).
+		Msg("Hub claimed successfully")
+
+	response := map[string]interface{}{
+		"success":   true,
+		"message":   "Hub claimed successfully",
+		"hub_id":    hub.HubID,
+		"user":      user.Username,
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	api.sendJSON(w, http.StatusOK, response)
 }
 
 // User endpoints

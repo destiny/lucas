@@ -1,9 +1,11 @@
 gateway:
-    endpoint: tcp://gateway.example.com:5555
-    public_key: gateway_public_key_here
+    endpoint: tcp://localhost:5555
+    public_key: uEuS++YrpR6:!oT<J*@!n@5!THXu%{o5eeNahQUP
 hub:
-    public_key: hub_public_key_here
-    private_key: hub_private_key_here
+    id: hub_bd52e0cc-3365-48ef-87ba-8d11b7266fdd
+    public_key: 6T/n<d(tQV(6pw2KlGJMHJ$Ac4$nR)<*Zd34*QPQ
+    private_key: (k<B%di7h:lt?nbT@S?rwk:3ad]AY)39V&*Bd@*b
+    product_key: 4cc57800-d137-4101-a5f6-03b537d9a81a
 devices:
     - id: living_room_tv
       type: bravia

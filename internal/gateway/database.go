@@ -20,15 +20,17 @@ type User struct {
 }
 
 type Hub struct {
-	ID        int       `json:"id"`
-	UserID    int       `json:"user_id"`
-	HubID     string    `json:"hub_id"`
-	Name      string    `json:"name"`
-	PublicKey string    `json:"public_key"`
-	Endpoint  string    `json:"endpoint"`
-	Status    string    `json:"status"`
-	LastSeen  time.Time `json:"last_seen"`
-	CreatedAt time.Time `json:"created_at"`
+	ID            int       `json:"id"`
+	UserID        int       `json:"user_id"`
+	HubID         string    `json:"hub_id"`
+	Name          string    `json:"name"`
+	PublicKey     string    `json:"public_key"`
+	ProductKey    string    `json:"product_key"`
+	Endpoint      string    `json:"endpoint"`
+	Status        string    `json:"status"`
+	AutoRegistered bool     `json:"auto_registered"`
+	LastSeen      time.Time `json:"last_seen"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type Device struct {
@@ -88,8 +90,10 @@ func (d *Database) initSchema() error {
 			hub_id TEXT UNIQUE NOT NULL,
 			name TEXT NOT NULL,
 			public_key TEXT NOT NULL,
+			product_key TEXT,
 			endpoint TEXT,
 			status TEXT DEFAULT 'offline',
+			auto_registered BOOLEAN DEFAULT FALSE,
 			last_seen DATETIME,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -169,8 +173,8 @@ func (d *Database) GetUserByAPIKey(apiKey string) (*User, error) {
 
 // Hub operations
 func (d *Database) CreateHub(userID int, hubID, name, publicKey, endpoint string) (*Hub, error) {
-	query := `INSERT INTO hubs (user_id, hub_id, name, public_key, endpoint, status, last_seen) 
-			  VALUES (?, ?, ?, ?, ?, 'online', CURRENT_TIMESTAMP)`
+	query := `INSERT INTO hubs (user_id, hub_id, name, public_key, endpoint, status, auto_registered, last_seen) 
+			  VALUES (?, ?, ?, ?, ?, 'online', FALSE, CURRENT_TIMESTAMP)`
 	
 	result, err := d.db.Exec(query, userID, hubID, name, publicKey, endpoint)
 	if err != nil {
@@ -186,17 +190,23 @@ func (d *Database) CreateHub(userID int, hubID, name, publicKey, endpoint string
 }
 
 func (d *Database) GetHub(id int) (*Hub, error) {
-	query := `SELECT id, user_id, hub_id, name, public_key, endpoint, status, last_seen, created_at 
+	query := `SELECT id, user_id, hub_id, name, public_key, product_key, endpoint, status, auto_registered, last_seen, created_at 
 			  FROM hubs WHERE id = ?`
 	
 	var hub Hub
+	var userID sql.NullInt64
+	var productKey sql.NullString
 	err := d.db.QueryRow(query, id).Scan(
-		&hub.ID, &hub.UserID, &hub.HubID, &hub.Name, &hub.PublicKey, 
-		&hub.Endpoint, &hub.Status, &hub.LastSeen, &hub.CreatedAt,
+		&hub.ID, &userID, &hub.HubID, &hub.Name, &hub.PublicKey, 
+		&productKey, &hub.Endpoint, &hub.Status, &hub.AutoRegistered, &hub.LastSeen, &hub.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get hub: %w", err)
 	}
+	
+	// Handle nullable fields
+	hub.UserID = int(userID.Int64)
+	hub.ProductKey = productKey.String
 
 	return &hub, nil
 }
@@ -215,6 +225,80 @@ func (d *Database) GetHubByHubID(hubID string) (*Hub, error) {
 	}
 
 	return &hub, nil
+}
+
+// RegisterHub registers a new hub without requiring a user (for initial registration)
+func (d *Database) RegisterHub(hubID, publicKey, name, productKey string) (*Hub, error) {
+	// Check if hub already exists
+	_, err := d.GetHubByHubID(hubID)
+	if err == nil {
+		// Hub exists, update the public key and name
+		query := `UPDATE hubs SET public_key = ?, name = ?, status = 'offline', last_seen = CURRENT_TIMESTAMP 
+				  WHERE hub_id = ?`
+		_, err := d.db.Exec(query, publicKey, name, hubID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to update existing hub: %w", err)
+		}
+		// Return updated hub
+		return d.GetHubByHubID(hubID)
+	}
+
+	// Hub doesn't exist, create new one with NULL user_id
+	query := `INSERT INTO hubs (user_id, hub_id, name, public_key, product_key, endpoint, status, auto_registered, last_seen) 
+			  VALUES (NULL, ?, ?, ?, ?, '', 'offline', TRUE, CURRENT_TIMESTAMP)`
+	
+	result, err := d.db.Exec(query, hubID, name, publicKey, productKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to register hub: %w", err)
+	}
+	
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get hub ID: %w", err)
+	}
+	
+	return d.GetHub(int(id))
+}
+
+func (d *Database) GetHubByProductKey(productKey string) (*Hub, error) {
+	query := `SELECT id, user_id, hub_id, name, public_key, product_key, endpoint, status, auto_registered, last_seen, created_at 
+			  FROM hubs WHERE product_key = ?`
+	
+	var hub Hub
+	var userID sql.NullInt64
+	var productKeyDB sql.NullString
+	err := d.db.QueryRow(query, productKey).Scan(
+		&hub.ID, &userID, &hub.HubID, &hub.Name, &hub.PublicKey,
+		&productKeyDB, &hub.Endpoint, &hub.Status, &hub.AutoRegistered, &hub.LastSeen, &hub.CreatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get hub by product key: %w", err)
+	}
+	
+	// Handle nullable fields
+	hub.UserID = int(userID.Int64)
+	hub.ProductKey = productKeyDB.String
+
+	return &hub, nil
+}
+
+func (d *Database) ClaimHub(hubID string, userID int) error {
+	query := `UPDATE hubs SET user_id = ?, auto_registered = FALSE WHERE hub_id = ?`
+	_, err := d.db.Exec(query, userID, hubID)
+	if err != nil {
+		return fmt.Errorf("failed to claim hub: %w", err)
+	}
+	return nil
+}
+
+func (d *Database) UpdateDevicesUserID(hubID, userID int) error {
+	// Update devices to inherit user_id from the claimed hub
+	query := `UPDATE devices SET status = 'claimed' WHERE hub_id = ?`
+	_, err := d.db.Exec(query, hubID)
+	if err != nil {
+		return fmt.Errorf("failed to update device ownership: %w", err)
+	}
+	return nil
 }
 
 func (d *Database) GetUserHubs(userID int) ([]*Hub, error) {

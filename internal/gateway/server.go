@@ -63,12 +63,16 @@ func (s *ZMQServer) Start() error {
 		return fmt.Errorf("failed to create ROUTER socket: %w", err)
 	}
 
-	// Configure CurveZMQ server
+	// Configure CurveZMQ server (temporarily disabled for testing)
+	// TODO: Re-enable after basic communication is verified
+	/*
 	err = socket.ServerAuthCurve("*", s.keys.GetServerPrivateKey())
 	if err != nil {
 		socket.Close()
 		return fmt.Errorf("failed to configure CurveZMQ server: %w", err)
 	}
+	*/
+	s.logger.Info().Msg("CurveZMQ disabled for testing - using plain socket")
 
 	// Set socket options
 	if err := socket.SetLinger(1000); err != nil {
@@ -143,7 +147,9 @@ func (s *ZMQServer) messageLoop() {
 		}
 
 		if len(msg) < 2 {
-			s.logger.Warn().Msg("Received malformed message (too few parts)")
+			s.logger.Warn().
+				Int("parts_count", len(msg)).
+				Msg("Received malformed message (too few parts)")
 			continue
 		}
 
@@ -153,8 +159,32 @@ func (s *ZMQServer) messageLoop() {
 
 		s.logger.Debug().
 			Str("identity", identity).
+			Str("identity_hex", fmt.Sprintf("%x", msg[0])).
+			Int("identity_size", len(msg[0])).
 			Int("message_size", len(messageData)).
+			Str("message_hex", s.getMessageHex(messageData)).
+			Int("parts_count", len(msg)).
 			Msg("Received message from hub")
+
+		// Log all message parts for debugging
+		for i, part := range msg {
+			s.logger.Debug().
+				Int("part_index", i).
+				Int("part_size", len(part)).
+				Str("part_hex", fmt.Sprintf("%x", part[:min(20, len(part))])).
+				Str("part_preview", s.getMessagePreview(part)).
+				Msg("Message part details")
+		}
+
+		// Add validation for empty message data
+		if len(messageData) == 0 {
+			s.logger.Warn().
+				Str("identity", identity).
+				Msg("Received empty message data")
+			response := s.createErrorResponse("empty_message", "Message data is empty")
+			s.sendResponse(identity, response)
+			continue
+		}
 
 		// Process message
 		response := s.processMessage(identity, messageData)
@@ -179,6 +209,9 @@ func (s *ZMQServer) processMessage(identity string, messageData []byte) []byte {
 		s.logger.Error().
 			Str("identity", identity).
 			Err(err).
+			Int("message_length", len(messageData)).
+			Str("message_preview", s.getMessagePreview(messageData)).
+			Str("message_hex", s.getMessageHex(messageData)).
 			Msg("Failed to parse message JSON")
 		return s.createErrorResponse("invalid_json", "Failed to parse message")
 	}
@@ -199,14 +232,12 @@ func (s *ZMQServer) processMessage(identity string, messageData []byte) []byte {
 
 	// Route message based on type
 	switch msgType {
-	case "register":
-		return s.handleRegistration(identity, message)
+	case "hub_online":
+		return s.handleHubOnline(identity, message)
+	case "device_list":
+		return s.handleDeviceList(identity, message)
 	case "ping":
 		return s.handlePing(identity, message)
-	case "device_discovery":
-		return s.handleDeviceDiscovery(identity, message)
-	case "status_update":
-		return s.handleStatusUpdate(identity, message)
 	default:
 		s.logger.Warn().
 			Str("identity", identity).
@@ -216,79 +247,24 @@ func (s *ZMQServer) processMessage(identity string, messageData []byte) []byte {
 	}
 }
 
-// handleRegistration handles hub registration requests
-func (s *ZMQServer) handleRegistration(identity string, message map[string]interface{}) []byte {
+// handleHubOnline handles the hub online message
+func (s *ZMQServer) handleHubOnline(identity string, message map[string]interface{}) []byte {
 	s.logger.Info().
 		Str("identity", identity).
-		Msg("Processing hub registration")
+		Msg("Processing hub online message")
 
-	// Extract registration data
+	// Extract hub_id
 	hubID, ok := message["hub_id"].(string)
 	if !ok {
-		return s.createErrorResponse("missing_hub_id", "Registration must include hub_id")
+		return s.createErrorResponse("missing_hub_id", "Hub online message must include hub_id")
 	}
 
-	publicKey, ok := message["public_key"].(string)
-	if !ok {
-		return s.createErrorResponse("missing_public_key", "Registration must include public_key")
-	}
-
-	name, _ := message["name"].(string)
-	if name == "" {
-		name = hubID // Default to hub_id if name not provided
-	}
-
-	// Validate public key format
-	if err := ValidateCurveKey(publicKey); err != nil {
+	// Update hub status in database
+	if err := s.database.UpdateHubStatus(hubID, "online"); err != nil {
 		s.logger.Error().
-			Str("identity", identity).
 			Str("hub_id", hubID).
 			Err(err).
-			Msg("Invalid public key in registration")
-		return s.createErrorResponse("invalid_key", "Invalid public key format")
-	}
-
-	// For now, create a default user if not exists (in production, this would be authenticated)
-	// This is a simplified approach for the demo
-	defaultUser, err := s.database.GetUserByAPIKey("default")
-	if err != nil {
-		// Create default user
-		defaultUser, err = s.database.CreateUser("default", "default@example.com")
-		if err != nil {
-			s.logger.Error().
-				Err(err).
-				Msg("Failed to create default user")
-			return s.createErrorResponse("database_error", "Failed to create user")
-		}
-	}
-
-	// Check if hub already exists
-	existingHub, err := s.database.GetHubByHubID(hubID)
-	if err == nil {
-		// Hub exists, update it
-		if err := s.database.UpdateHubStatus(hubID, "online"); err != nil {
-			s.logger.Error().
-				Str("hub_id", hubID).
-				Err(err).
-				Msg("Failed to update hub status")
-			return s.createErrorResponse("database_error", "Failed to update hub status")
-		}
-		s.logger.Info().
-			Str("hub_id", hubID).
-			Msg("Updated existing hub status to online")
-	} else {
-		// Create new hub
-		existingHub, err = s.database.CreateHub(defaultUser.ID, hubID, name, publicKey, "")
-		if err != nil {
-			s.logger.Error().
-				Str("hub_id", hubID).
-				Err(err).
-				Msg("Failed to create hub in database")
-			return s.createErrorResponse("database_error", "Failed to register hub")
-		}
-		s.logger.Info().
-			Str("hub_id", hubID).
-			Msg("Created new hub registration")
+			Msg("Failed to update hub status")
 	}
 
 	// Store connection info
@@ -296,42 +272,15 @@ func (s *ZMQServer) handleRegistration(identity string, message map[string]inter
 	s.connections[identity] = &HubConnection{
 		HubID:     hubID,
 		Identity:  identity,
-		PublicKey: publicKey,
 		LastPing:  time.Now(),
 		Status:    "online",
-		UserID:    existingHub.UserID,
 	}
 	s.mutex.Unlock()
 
-	s.logger.Info().
-		Str("identity", identity).
-		Str("hub_id", hubID).
-		Msg("Hub registration successful")
-
-	// Create success response
+	// Send gateway ready message
 	response := map[string]interface{}{
-		"type":       "register_response",
-		"success":    true,
-		"hub_id":     hubID,
-		"gateway_id": "lucas-gateway",
-		"timestamp":  time.Now().UTC().Format(time.RFC3339),
-	}
-
-	responseJSON, _ := json.Marshal(response)
-	return responseJSON
-}
-
-// handlePing handles ping messages from hubs
-func (s *ZMQServer) handlePing(identity string, message map[string]interface{}) []byte {
-	s.mutex.Lock()
-	if conn, exists := s.connections[identity]; exists {
-		conn.LastPing = time.Now()
-		s.database.UpdateHubStatus(conn.HubID, "online")
-	}
-	s.mutex.Unlock()
-
-	response := map[string]interface{}{
-		"type":      "pong",
+		"type":      "gateway_ready",
+		"success":   true,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -339,8 +288,8 @@ func (s *ZMQServer) handlePing(identity string, message map[string]interface{}) 
 	return responseJSON
 }
 
-// handleDeviceDiscovery handles device discovery messages from hubs
-func (s *ZMQServer) handleDeviceDiscovery(identity string, message map[string]interface{}) []byte {
+// handleDeviceList handles the device list message from a hub
+func (s *ZMQServer) handleDeviceList(identity string, message map[string]interface{}) []byte {
 	s.mutex.RLock()
 	conn, exists := s.connections[identity]
 	s.mutex.RUnlock()
@@ -376,7 +325,7 @@ func (s *ZMQServer) handleDeviceDiscovery(identity string, message map[string]in
 		name, _ := deviceMap["name"].(string)
 		model, _ := deviceMap["model"].(string)
 		address, _ := deviceMap["address"].(string)
-		
+
 		capabilities := []string{}
 		if caps, ok := deviceMap["capabilities"].([]interface{}); ok {
 			for _, cap := range caps {
@@ -410,7 +359,7 @@ func (s *ZMQServer) handleDeviceDiscovery(identity string, message map[string]in
 	}
 
 	response := map[string]interface{}{
-		"type":         "device_discovery_response",
+		"type":         "devices_registered",
 		"success":      true,
 		"device_count": len(devices),
 		"timestamp":    time.Now().UTC().Format(time.RFC3339),
@@ -420,24 +369,17 @@ func (s *ZMQServer) handleDeviceDiscovery(identity string, message map[string]in
 	return responseJSON
 }
 
-// handleStatusUpdate handles status update messages from hubs
-func (s *ZMQServer) handleStatusUpdate(identity string, message map[string]interface{}) []byte {
-	s.mutex.RLock()
-	conn, exists := s.connections[identity]
-	s.mutex.RUnlock()
-
-	if !exists {
-		return s.createErrorResponse("not_registered", "Hub not registered")
-	}
-
-	// Update connection last ping
+// handlePing handles ping messages from hubs
+func (s *ZMQServer) handlePing(identity string, message map[string]interface{}) []byte {
 	s.mutex.Lock()
-	conn.LastPing = time.Now()
+	if conn, exists := s.connections[identity]; exists {
+		conn.LastPing = time.Now()
+		s.database.UpdateHubStatus(conn.HubID, "online")
+	}
 	s.mutex.Unlock()
 
 	response := map[string]interface{}{
-		"type":      "status_update_response",
-		"success":   true,
+		"type":      "pong",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -572,3 +514,30 @@ func (s *ZMQServer) GetConnectionCount() int {
 	defer s.mutex.RUnlock()
 	return len(s.connections)
 }
+
+// getMessagePreview returns a safe string preview of message data
+func (s *ZMQServer) getMessagePreview(data []byte) string {
+	maxLen := 100
+	if len(data) > maxLen {
+		return string(data[:maxLen]) + "..."
+	}
+	return string(data)
+}
+
+// getMessageHex returns hex dump of first 50 bytes for debugging
+func (s *ZMQServer) getMessageHex(data []byte) string {
+	maxLen := 50
+	if len(data) > maxLen {
+		return fmt.Sprintf("%x...", data[:maxLen])
+	}
+	return fmt.Sprintf("%x", data)
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+

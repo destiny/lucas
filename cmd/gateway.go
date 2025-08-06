@@ -75,7 +75,7 @@ The gateway provides a central point for managing distributed IoT devices across
 		zmqServer := gateway.NewZMQServer(config.Server.ZMQ.Address, keys, database)
 
 		// Initialize API server
-		apiServer := gateway.NewAPIServer(database, zmqServer)
+		apiServer := gateway.NewAPIServer(database, zmqServer, keys)
 
 		// Start services
 		var wg sync.WaitGroup

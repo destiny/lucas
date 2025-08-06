@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -82,9 +83,10 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to connect to gateway: %w", err)
 	}
 
-	// Set up signal handling for graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	// Perform ZMQ handshake (includes hub_online and device registration)
+	if err := d.gatewayClient.PerformHandshake(); err != nil {
+		return fmt.Errorf("ZMQ handshake failed: %w", err)
+	}
 
 	// Start gateway message listener in a goroutine
 	go func() {
@@ -92,6 +94,10 @@ func (d *Daemon) Start() error {
 			d.logger.Error().Err(err).Msg("Gateway listener stopped with error")
 		}
 	}()
+
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	// Start health check routine
 	go d.startHealthCheck()
@@ -149,6 +155,11 @@ func (d *Daemon) handleGatewayMessage(msg *GatewayMessage) *HubResponse {
 		Str("device_id", msg.DeviceID).
 		Msg("Processing gateway message")
 
+	// Process device action
+	return d.processDeviceAction(msg, msg.Action)
+}
+
+func (d *Daemon) processDeviceAction(msg *GatewayMessage, action json.RawMessage) *HubResponse {
 	// Validate message
 	if msg.DeviceID == "" {
 		return &HubResponse{
@@ -161,7 +172,7 @@ func (d *Daemon) handleGatewayMessage(msg *GatewayMessage) *HubResponse {
 	}
 
 	// Process device action with nonce-based deduplication
-	response, err := d.deviceManager.ProcessDeviceActionWithNonce(msg.DeviceID, msg.Nonce, msg.Action)
+	response, err := d.deviceManager.ProcessDeviceActionWithNonce(msg.DeviceID, msg.Nonce, action)
 	if err != nil {
 		d.logger.Error().
 			Str("message_id", msg.ID).
@@ -198,6 +209,7 @@ func (d *Daemon) handleGatewayMessage(msg *GatewayMessage) *HubResponse {
 
 	return hubResponse
 }
+
 
 // startHealthCheck starts a periodic health check routine
 func (d *Daemon) startHealthCheck() {
