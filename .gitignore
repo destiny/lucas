@@ -94,3 +94,8 @@ _cgo_export.*
 # Module cache
 /pkg/
 /bin/
+
+gateway.db
+gateway_keys.yml
+hub.yml
+node_modules
