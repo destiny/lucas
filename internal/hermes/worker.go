@@ -392,7 +392,7 @@ func (w *HermesWorker) handleHeartbeat() error {
 	w.stats.LastHeartbeatReceived = time.Now()
 	w.mutex.Unlock()
 
-	w.logger.Info().
+	w.logger.Debug().
 		Int("total_received", w.stats.HeartbeatsReceived).
 		Msg("Received heartbeat response from broker")
 	w.liveness = 10
@@ -493,7 +493,7 @@ func (w *HermesWorker) sendHeartbeat() error {
 	w.stats.LastHeartbeatSent = time.Now()
 	w.mutex.Unlock()
 
-	w.logger.Info().
+	w.logger.Debug().
 		Int("total_sent", w.stats.HeartbeatsSent).
 		Msg("Sent HEARTBEAT message to broker")
 	return nil

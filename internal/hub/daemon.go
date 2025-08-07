@@ -15,6 +15,25 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// GatewayMessage represents a message from the gateway
+type GatewayMessage struct {
+	ID        string          `json:"id"`
+	Nonce     string          `json:"nonce"`     // Unique nonce for idempotency
+	Timestamp string          `json:"timestamp"`
+	DeviceID  string          `json:"device_id"`
+	Action    json.RawMessage `json:"action"`
+}
+
+// HubResponse represents a response from the hub to the gateway
+type HubResponse struct {
+	ID        string      `json:"id"`
+	Nonce     string      `json:"nonce"`     // Echo back the nonce
+	Timestamp string      `json:"timestamp"`
+	Success   bool        `json:"success"`
+	Data      interface{} `json:"data,omitempty"`
+	Error     string      `json:"error,omitempty"`
+}
+
 // Daemon represents the hub daemon
 type Daemon struct {
 	config        *Config

@@ -361,7 +361,7 @@ func (b *Broker) handleWorkerHeartbeat(workerID string) error {
 	b.stats.LastHeartbeat = time.Now()
 	b.mutex.Unlock()
 
-	b.logger.Info().
+	b.logger.Debug().
 		Str("worker_id", workerID).
 		Int("total_heartbeats", b.stats.HeartbeatsReceived).
 		Msg("Worker heartbeat received")
@@ -398,7 +398,7 @@ func (b *Broker) sendHeartbeatResponse(workerID string) error {
 	b.stats.HeartbeatsSent++
 	b.mutex.Unlock()
 
-	b.logger.Info().
+	b.logger.Debug().
 		Str("worker_id", workerID).
 		Int("total_sent", b.stats.HeartbeatsSent).
 		Msg("Heartbeat response sent to worker")
