@@ -95,6 +95,7 @@ _cgo_export.*
 /pkg/
 /bin/
 
-./gateway*
-./hub*
+gateway.db
+gateway_keys.yml
+hub.yml
 node_modules
