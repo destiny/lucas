@@ -176,9 +176,9 @@ func (ws *WorkerService) registerDeviceServices() error {
 			handler,
 		)
 
-		// Configure worker settings
-		worker.SetHeartbeat(30 * time.Second)
-		worker.SetReconnectInterval(5 * time.Second)
+		// Configure worker settings for internet reliability
+		worker.SetHeartbeat(45 * time.Second)       // Longer heartbeat interval for internet
+		worker.SetReconnectInterval(10 * time.Second) // Longer initial reconnect delay
 
 		ws.mutex.Lock()
 		ws.workers[serviceName] = worker

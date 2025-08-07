@@ -100,12 +100,15 @@ type WorkerInfo struct {
 
 // BrokerStats represents broker statistics
 type BrokerStats struct {
-	Services    int       `json:"services"`
-	Workers     int       `json:"workers"`
-	Requests    int       `json:"requests"`
-	Responses   int       `json:"responses"`
-	StartTime   time.Time `json:"start_time"`
-	LastRequest time.Time `json:"last_request"`
+	Services          int       `json:"services"`
+	Workers           int       `json:"workers"`
+	Requests          int       `json:"requests"`
+	Responses         int       `json:"responses"`
+	HeartbeatsReceived int       `json:"heartbeats_received"`
+	HeartbeatsSent    int       `json:"heartbeats_sent"`
+	StartTime         time.Time `json:"start_time"`
+	LastRequest       time.Time `json:"last_request"`
+	LastHeartbeat     time.Time `json:"last_heartbeat"`
 }
 
 // RequestHandler interface for handling service requests

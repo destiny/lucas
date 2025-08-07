@@ -67,8 +67,8 @@ func TestBrokerBasicOperations(t *testing.T) {
 		if broker.workers == nil {
 			t.Error("Expected non-nil workers map")
 		}
-		if broker.heartbeat != 30*time.Second {
-			t.Errorf("Expected default heartbeat 30s, got %v", broker.heartbeat)
+		if broker.heartbeat != 45*time.Second {
+			t.Errorf("Expected default heartbeat 45s, got %v", broker.heartbeat)
 		}
 	})
 
@@ -152,8 +152,8 @@ func TestBrokerBasicOperations(t *testing.T) {
 		// Check initial liveness
 		workers := broker.GetWorkers()
 		worker := workers["worker1"]
-		if worker.Liveness != 3 {
-			t.Errorf("Expected initial liveness 3, got %d", worker.Liveness)
+		if worker.Liveness != 10 {
+			t.Errorf("Expected initial liveness 10, got %d", worker.Liveness)
 		}
 		
 		// Handle heartbeat
@@ -162,11 +162,11 @@ func TestBrokerBasicOperations(t *testing.T) {
 			t.Errorf("Failed to handle worker heartbeat: %v", err)
 		}
 		
-		// Liveness should remain 3 (reset to full)
+		// Liveness should remain 10 (reset to full)
 		workers = broker.GetWorkers()
 		worker = workers["worker1"]
-		if worker.Liveness != 3 {
-			t.Errorf("Expected liveness 3 after heartbeat, got %d", worker.Liveness)
+		if worker.Liveness != 10 {
+			t.Errorf("Expected liveness 10 after heartbeat, got %d", worker.Liveness)
 		}
 	})
 

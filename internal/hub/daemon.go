@@ -201,7 +201,7 @@ func (d *Daemon) processDeviceAction(msg *GatewayMessage, action json.RawMessage
 
 // startHealthCheck starts a periodic health check routine
 func (d *Daemon) startHealthCheck() {
-	ticker := time.NewTicker(30 * time.Second) // Health check every 30 seconds
+	ticker := time.NewTicker(60 * time.Second) // Health check every 60 seconds for less system noise
 	defer ticker.Stop()
 
 	d.logger.Info().Msg("Starting health check routine")

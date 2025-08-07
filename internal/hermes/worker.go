@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -25,32 +26,38 @@ const (
 
 // HermesWorker implements the Hermes Majordomo Protocol worker
 type HermesWorker struct {
-	broker       string
-	service      string
-	identity     string
-	socket       *zmq4.Socket
-	heartbeat    time.Duration
-	reconnect    time.Duration
-	liveness     int
-	handler      RequestHandler
-	state        WorkerState
-	ctx          context.Context
-	cancel       context.CancelFunc
-	logger       zerolog.Logger
-	stats        *WorkerStats
-	mutex        sync.RWMutex
-	requestCount int
+	broker          string
+	service         string
+	identity        string
+	socket          *zmq4.Socket
+	heartbeat       time.Duration
+	reconnect       time.Duration
+	liveness        int
+	handler         RequestHandler
+	state           WorkerState
+	ctx             context.Context
+	cancel          context.CancelFunc
+	logger          zerolog.Logger
+	stats           *WorkerStats
+	mutex           sync.RWMutex
+	requestCount    int
+	reconnectAttempt int           // Track reconnection attempts for backoff
+	maxReconnectDelay time.Duration // Maximum backoff delay
 }
 
 // WorkerStats represents worker statistics
 type WorkerStats struct {
-	RequestsHandled  int       `json:"requests_handled"`
-	RequestsFailed   int       `json:"requests_failed"`
-	LastRequest      time.Time `json:"last_request"`
-	StartTime        time.Time `json:"start_time"`
-	Reconnections    int       `json:"reconnections"`
-	CurrentLiveness  int       `json:"current_liveness"`
-	State            string    `json:"state"`
+	RequestsHandled     int       `json:"requests_handled"`
+	RequestsFailed      int       `json:"requests_failed"`
+	LastRequest         time.Time `json:"last_request"`
+	StartTime           time.Time `json:"start_time"`
+	Reconnections       int       `json:"reconnections"`
+	CurrentLiveness     int       `json:"current_liveness"`
+	State               string    `json:"state"`
+	HeartbeatsSent      int       `json:"heartbeats_sent"`
+	HeartbeatsReceived  int       `json:"heartbeats_received"`
+	LastHeartbeatSent   time.Time `json:"last_heartbeat_sent"`
+	LastHeartbeatReceived time.Time `json:"last_heartbeat_received"`
 }
 
 // NewWorker creates a new Hermes worker
@@ -58,17 +65,19 @@ func NewWorker(broker, service, identity string, handler RequestHandler) *Hermes
 	ctx, cancel := context.WithCancel(context.Background())
 	
 	return &HermesWorker{
-		broker:    broker,
-		service:   service,
-		identity:  identity,
-		handler:   handler,
-		heartbeat: 30 * time.Second, // Default heartbeat interval
-		reconnect: 5 * time.Second,  // Default reconnection interval
-		liveness:  3,                // Default liveness
-		state:     WorkerStateDisconnected,
-		ctx:       ctx,
-		cancel:    cancel,
-		logger:    logger.New(),
+		broker:            broker,
+		service:           service,
+		identity:          identity,
+		handler:           handler,
+		heartbeat:         30 * time.Second, // Default heartbeat interval
+		reconnect:         5 * time.Second,  // Default reconnection interval
+		liveness:          10,               // Default liveness for internet tolerance
+		state:             WorkerStateDisconnected,
+		ctx:               ctx,
+		cancel:            cancel,
+		logger:            logger.New(),
+		reconnectAttempt:  0,
+		maxReconnectDelay: 60 * time.Second, // Maximum 60 second delay
 		stats: &WorkerStats{
 			StartTime: time.Now(),
 		},
@@ -162,7 +171,10 @@ func (w *HermesWorker) connect() error {
 		return fmt.Errorf("failed to set linger: %w", err)
 	}
 
-	if err = socket.SetRcvtimeo(w.heartbeat); err != nil {
+	// Set receive timeout to be longer than heartbeat interval to avoid premature timeouts
+	// Use 1.5x heartbeat interval to account for network delays and jitter
+	receiveTimeout := time.Duration(float64(w.heartbeat) * 1.5)
+	if err = socket.SetRcvtimeo(receiveTimeout); err != nil {
 		socket.Close()
 		return fmt.Errorf("failed to set receive timeout: %w", err)
 	}
@@ -179,7 +191,7 @@ func (w *HermesWorker) connect() error {
 	}
 
 	w.socket = socket
-	w.liveness = 3
+	w.liveness = 10
 
 	// Send READY message to register with broker
 	if err = w.sendReady(); err != nil {
@@ -215,7 +227,8 @@ func (w *HermesWorker) messageLoop() {
 			msg, err := w.socket.RecvMessageBytes(0)
 			if err != nil {
 				if err.Error() == "resource temporarily unavailable" {
-					// Timeout - check if we need to reconnect
+					// Normal socket timeout - continue processing
+					// Don't decrement liveness here as this is expected behavior
 					w.mutex.RLock()
 					state := w.state
 					w.mutex.RUnlock()
@@ -224,11 +237,7 @@ func (w *HermesWorker) messageLoop() {
 						continue
 					}
 					
-					w.liveness--
-					if w.liveness <= 0 {
-						w.logger.Warn().Msg("Lost connection to broker - attempting reconnect")
-						w.reconnectToBroker()
-					}
+					// Just continue, liveness will be managed by heartbeat success/failure
 					continue
 				}
 				
@@ -258,7 +267,7 @@ func (w *HermesWorker) messageLoop() {
 				Msg("Received message from broker")
 
 			// Reset liveness on any valid message
-			w.liveness = 3
+			w.liveness = 10
 
 			// Parse and handle message
 			if err := w.handleMessage(msg[1:]); err != nil {
@@ -377,8 +386,16 @@ func (w *HermesWorker) handleRequest(clientID string, body []byte, extraParts []
 
 // handleHeartbeat handles heartbeat from broker
 func (w *HermesWorker) handleHeartbeat() error {
-	w.logger.Debug().Msg("Received heartbeat from broker")
-	w.liveness = 3
+	// Update heartbeat received statistics
+	w.mutex.Lock()
+	w.stats.HeartbeatsReceived++
+	w.stats.LastHeartbeatReceived = time.Now()
+	w.mutex.Unlock()
+
+	w.logger.Info().
+		Int("total_received", w.stats.HeartbeatsReceived).
+		Msg("Received heartbeat response from broker")
+	w.liveness = 10
 	return nil
 }
 
@@ -470,7 +487,15 @@ func (w *HermesWorker) sendHeartbeat() error {
 		return fmt.Errorf("failed to send HEARTBEAT message: %w", err)
 	}
 
-	w.logger.Debug().Msg("Sent HEARTBEAT message to broker")
+	// Update heartbeat statistics
+	w.mutex.Lock()
+	w.stats.HeartbeatsSent++
+	w.stats.LastHeartbeatSent = time.Now()
+	w.mutex.Unlock()
+
+	w.logger.Info().
+		Int("total_sent", w.stats.HeartbeatsSent).
+		Msg("Sent HEARTBEAT message to broker")
 	return nil
 }
 
@@ -501,14 +526,18 @@ func (w *HermesWorker) sendDisconnect() error {
 	return nil
 }
 
-// heartbeatLoop sends periodic heartbeats to broker
+// heartbeatLoop sends periodic heartbeats to broker with jitter
 func (w *HermesWorker) heartbeatLoop() {
-	ticker := time.NewTicker(w.heartbeat)
+	// Add jitter to prevent synchronization issues (±5 seconds)
+	jitter := time.Duration(rand.Intn(10000)-5000) * time.Millisecond
+	interval := w.heartbeat + jitter
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	w.logger.Info().
-		Dur("interval", w.heartbeat).
-		Msg("Starting Hermes worker heartbeat loop")
+		Dur("base_interval", w.heartbeat).
+		Dur("actual_interval", interval).
+		Msg("Starting Hermes worker heartbeat loop with jitter")
 
 	for {
 		select {
@@ -526,6 +555,11 @@ func (w *HermesWorker) heartbeatLoop() {
 					}
 				}
 			}
+			
+			// Update ticker with new jitter to avoid long-term synchronization
+			jitter := time.Duration(rand.Intn(10000)-5000) * time.Millisecond
+			newInterval := w.heartbeat + jitter
+			ticker.Reset(newInterval)
 		case <-w.ctx.Done():
 			w.logger.Info().Msg("Hermes worker heartbeat loop stopping")
 			return
@@ -533,7 +567,7 @@ func (w *HermesWorker) heartbeatLoop() {
 	}
 }
 
-// reconnectToBroker attempts to reconnect to the broker
+// reconnectToBroker attempts to reconnect to the broker with exponential backoff
 func (w *HermesWorker) reconnectToBroker() {
 	w.mutex.Lock()
 	if w.state == WorkerStateReconnecting {
@@ -542,9 +576,26 @@ func (w *HermesWorker) reconnectToBroker() {
 	}
 	w.state = WorkerStateReconnecting
 	w.stats.Reconnections++
+	w.reconnectAttempt++
 	w.mutex.Unlock()
 
-	w.logger.Warn().Msg("Reconnecting to broker")
+	// Calculate exponential backoff delay with jitter
+	// Formula: min(maxDelay, baseDelay * 2^attempt) + jitter
+	baseDelay := w.reconnect
+	backoffDelay := time.Duration(1 << uint(w.reconnectAttempt-1)) * baseDelay
+	if backoffDelay > w.maxReconnectDelay {
+		backoffDelay = w.maxReconnectDelay
+	}
+	
+	// Add jitter (±25% of delay) to prevent thundering herd
+	jitterRange := int64(backoffDelay / 4)
+	jitter := time.Duration(rand.Int63n(jitterRange*2) - jitterRange)
+	actualDelay := backoffDelay + jitter
+	
+	w.logger.Warn().
+		Int("attempt", w.reconnectAttempt).
+		Dur("delay", actualDelay).
+		Msg("Reconnecting to broker with exponential backoff")
 
 	// Close existing socket
 	if w.socket != nil {
@@ -553,22 +604,30 @@ func (w *HermesWorker) reconnectToBroker() {
 	}
 
 	// Wait before reconnecting
-	time.Sleep(w.reconnect)
+	time.Sleep(actualDelay)
 
 	// Attempt to reconnect
 	if err := w.connect(); err != nil {
-		w.logger.Error().Err(err).Msg("Failed to reconnect to broker")
+		w.logger.Error().
+			Err(err).
+			Int("attempt", w.reconnectAttempt).
+			Msg("Failed to reconnect to broker")
 		w.mutex.Lock()
 		w.state = WorkerStateDisconnected
 		w.mutex.Unlock()
 		
 		// Schedule another reconnection attempt
 		go func() {
-			time.Sleep(w.reconnect * 2) // Exponential backoff
-			if w.ctx.Err() == nil {    // Only if not shutting down
+			if w.ctx.Err() == nil { // Only if not shutting down
 				w.reconnectToBroker()
 			}
 		}()
+	} else {
+		// Reset attempt counter on successful connection
+		w.mutex.Lock()
+		w.reconnectAttempt = 0
+		w.mutex.Unlock()
+		w.logger.Info().Msg("Successfully reconnected to broker")
 	}
 }
 
