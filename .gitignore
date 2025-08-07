@@ -94,3 +94,6 @@ _cgo_export.*
 # Module cache
 /pkg/
 /bin/
+
+./gateway*
+./hub*
