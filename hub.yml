@@ -1,11 +1,11 @@
 gateway:
     endpoint: tcp://localhost:5555
-    public_key: 3d6WtXG%#A-$+/QwSwYj*066x0U:i)N6xL>zWKq?
+    public_key: q)CGlMFF+i1r)}VE$35m+7^*.E[(hxedUs@EZFit
 hub:
-    id: hub_1e598eca-384e-4421-aaac-3c94c70123ec
-    public_key: hf#]mjr0v.dX}lxua+WeKwjJImDv+soq9<TE&2[c
-    private_key: ZPZwEO/aq=EZ?CiR%1J1C=KZ1.gc?S]n942-)?1h
-    product_key: 891b9e39-29c8-4e3e-abf3-1503626d71a0
+    id: hub_86e88ec1-a283-441a-8efd-dff702d2a731
+    public_key: ZP!9m7DMGvTtNRgHq2g8v0^1sO]Y:ilp6dSeP0xL
+    private_key: ub$yd9$:=H1Pjd.zBgK6y()t5Y>DX44ae$:<?3wf
+    product_key: 15d70171-c295-49ef-b7ce-025fbb3cef22
 devices:
     - id: living_room_tv
       type: bravia

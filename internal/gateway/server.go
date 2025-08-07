@@ -24,6 +24,7 @@ type HubConnection struct {
 }
 
 // ZMQServer handles ZMQ ROUTER communication with hubs
+// Deprecated: Use BrokerService with Hermes protocol instead
 type ZMQServer struct {
 	socket      *zmq4.Socket
 	address     string
@@ -38,6 +39,7 @@ type ZMQServer struct {
 }
 
 // NewZMQServer creates a new ZMQ server for hub communication
+// Deprecated: Use NewBrokerService with Hermes protocol instead
 func NewZMQServer(address string, keys *GatewayKeys, database *Database) *ZMQServer {
 	ctx, cancel := context.WithCancel(context.Background())
 

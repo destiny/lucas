@@ -31,6 +31,7 @@ type HubResponse struct {
 }
 
 // GatewayClient handles ZMQ communication with the gateway
+// Deprecated: Use WorkerService with Hermes protocol instead
 type GatewayClient struct {
 	socket          *zmq4.Socket
 	config          *Config
@@ -42,6 +43,7 @@ type GatewayClient struct {
 }
 
 // NewGatewayClient creates a new gateway client
+// Deprecated: Use NewWorkerService with Hermes protocol instead
 func NewGatewayClient(config *Config) *GatewayClient {
 	return &GatewayClient{
 		config:          config,

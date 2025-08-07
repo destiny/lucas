@@ -71,22 +71,22 @@ The gateway provides a central point for managing distributed IoT devices across
 			Str("public_key", keys.GetServerPublicKey()).
 			Msg("Gateway keys loaded")
 
-		// Initialize ZMQ server
-		zmqServer := gateway.NewZMQServer(config.Server.ZMQ.Address, keys, database)
+		// Initialize Hermes Broker Service
+		brokerService := gateway.NewBrokerService(config.Server.ZMQ.Address, keys, database)
 
 		// Initialize API server
-		apiServer := gateway.NewAPIServer(database, zmqServer, keys)
+		apiServer := gateway.NewAPIServer(database, brokerService, keys)
 
 		// Start services
 		var wg sync.WaitGroup
 		errChan := make(chan error, 2)
 
-		// Start ZMQ server
+		// Start Hermes Broker Service
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := zmqServer.Start(); err != nil {
-				errChan <- fmt.Errorf("ZMQ server error: %w", err)
+			if err := brokerService.Start(); err != nil {
+				errChan <- fmt.Errorf("Broker service error: %w", err)
 			}
 		}()
 
@@ -116,8 +116,8 @@ The gateway provides a central point for managing distributed IoT devices across
 		// Shutdown services
 		log.Info().Msg("Shutting down gateway services")
 		
-		if err := zmqServer.Stop(); err != nil {
-			log.Error().Err(err).Msg("Error stopping ZMQ server")
+		if err := brokerService.Stop(); err != nil {
+			log.Error().Err(err).Msg("Error stopping Broker service")
 		}
 		
 		if err := apiServer.Stop(); err != nil {

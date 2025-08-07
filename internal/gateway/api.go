@@ -9,26 +9,25 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
-	"lucas/internal/hub"
 	"lucas/internal/logger"
 )
 
 // APIServer handles REST API requests
 type APIServer struct {
-	database  *Database
-	zmqServer *ZMQServer
-	keys      *GatewayKeys
-	logger    zerolog.Logger
-	server    *http.Server
+	database      *Database
+	brokerService *BrokerService
+	keys          *GatewayKeys
+	logger        zerolog.Logger
+	server        *http.Server
 }
 
 // NewAPIServer creates a new API server
-func NewAPIServer(database *Database, zmqServer *ZMQServer, keys *GatewayKeys) *APIServer {
+func NewAPIServer(database *Database, brokerService *BrokerService, keys *GatewayKeys) *APIServer {
 	return &APIServer{
-		database:  database,
-		zmqServer: zmqServer,
-		keys:      keys,
-		logger:    logger.New(),
+		database:      database,
+		brokerService: brokerService,
+		keys:          keys,
+		logger:        logger.New(),
 	}
 }
 
@@ -136,15 +135,15 @@ func (api *APIServer) sendError(w http.ResponseWriter, status int, message strin
 
 // Gateway endpoints
 func (api *APIServer) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
-	connections := api.zmqServer.GetActiveConnections()
+	stats := api.brokerService.GetServiceStats()
 	
 	status := map[string]interface{}{
 		"status":            "running",
-		"active_hubs":       len(connections),
+		"active_hubs":       getActiveHubCount(stats),
 		"uptime":           "N/A", // Could add uptime tracking
 		"version":          "1.0.0",
 		"timestamp":        time.Now().UTC().Format(time.RFC3339),
-		"hub_connections":  connections,
+		"service_stats":    stats,
 	}
 
 	api.sendJSON(w, http.StatusOK, status)
@@ -162,10 +161,10 @@ func (api *APIServer) handleKeyInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *APIServer) handleConnections(w http.ResponseWriter, r *http.Request) {
-	connections := api.zmqServer.GetActiveConnections()
+	stats := api.brokerService.GetServiceStats()
 	api.sendJSON(w, http.StatusOK, map[string]interface{}{
-		"connections": connections,
-		"count":       len(connections),
+		"service_stats": stats,
+		"active_hubs":   getActiveHubCount(stats),
 	})
 }
 
@@ -408,48 +407,30 @@ func (api *APIServer) handleDeviceAction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Check if hub is connected
-	if !api.zmqServer.IsHubConnected(deviceHub.HubID) {
-		api.sendError(w, http.StatusServiceUnavailable, "Hub not connected")
-		return
-	}
+	// Create device action using BrokerService
+	deviceAction := json.RawMessage(fmt.Sprintf(`{"type":"%s","action":"%s","parameters":%s}`, 
+		actionReq.Type, actionReq.Action, mustMarshal(actionReq.Parameters)))
 
-	// Create gateway message for hub
-	gatewayMessage := hub.GatewayMessage{
-		ID:        fmt.Sprintf("api-%d", time.Now().UnixNano()),
-		Nonce:     hub.GenerateNonce(),
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		DeviceID:  deviceID,
-		Action:    json.RawMessage(fmt.Sprintf(`{"type":"%s","action":"%s","parameters":%s}`, 
-			actionReq.Type, actionReq.Action, mustMarshal(actionReq.Parameters))),
-	}
-
-	// Send message to hub
-	messageJSON, err := json.Marshal(gatewayMessage)
+	// Send device command via Hermes BrokerService
+	response, err := api.brokerService.SendDeviceCommand(deviceHub.HubID, deviceID, deviceAction)
 	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "Failed to create message")
-		return
-	}
-
-	if err := api.zmqServer.SendMessageToHub(deviceHub.HubID, messageJSON); err != nil {
 		api.logger.Error().
 			Str("hub_id", deviceHub.HubID).
 			Str("device_id", deviceID).
 			Err(err).
-			Msg("Failed to send message to hub")
-		api.sendError(w, http.StatusInternalServerError, "Failed to send command to device")
+			Msg("Failed to send device command via broker service")
+		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to send command to device: %v", err))
 		return
 	}
 
-	// For now, return immediate response (in production, might wait for hub response)
-	api.sendJSON(w, http.StatusAccepted, map[string]interface{}{
-		"success":    true,
-		"message":    "Command sent to device",
-		"message_id": gatewayMessage.ID,
-		"nonce":      gatewayMessage.Nonce,
-		"device":     device,
-		"hub":        deviceHub.HubID,
-		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+	// Return response from BrokerService
+	api.sendJSON(w, http.StatusOK, map[string]interface{}{
+		"success":   true,
+		"message":   "Device command executed successfully",
+		"response":  response,
+		"device":    device,
+		"hub":       deviceHub.HubID,
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	})
 }
 
@@ -463,10 +444,12 @@ func (api *APIServer) handleListUsers(w http.ResponseWriter, r *http.Request) {
 
 func (api *APIServer) handleListHubs(w http.ResponseWriter, r *http.Request) {
 	// This would normally require admin authentication
-	connections := api.zmqServer.GetActiveConnections()
+	stats := api.brokerService.GetServiceStats()
+	activeHubs := getActiveHubCount(stats)
 	api.sendJSON(w, http.StatusOK, map[string]interface{}{
-		"active_hubs": connections,
-		"count":       len(connections),
+		"active_hubs":   activeHubs,
+		"count":         activeHubs,
+		"service_stats": stats,
 	})
 }
 
@@ -483,15 +466,15 @@ func (api *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":     "healthy",
 		"timestamp":  time.Now().UTC().Format(time.RFC3339),
 		"components": map[string]string{
-			"database":   "healthy",
-			"zmq_server": "healthy",
+			"database":       "healthy",
+			"broker_service": "healthy",
 		},
 	}
 
 	api.sendJSON(w, http.StatusOK, health)
 }
 
-// Helper function
+// Helper functions
 func mustMarshal(v interface{}) string {
 	if v == nil {
 		return "{}"
@@ -501,4 +484,17 @@ func mustMarshal(v interface{}) string {
 		return "{}"
 	}
 	return string(data)
+}
+
+// getActiveHubCount extracts the number of active hubs from service stats
+func getActiveHubCount(stats map[string]interface{}) int {
+	if workers, ok := stats["workers"].(map[string]interface{}); ok {
+		return len(workers)
+	}
+	if brokerStats, ok := stats["broker"].(map[string]interface{}); ok {
+		if workers, ok := brokerStats["workers"].(int); ok {
+			return workers
+		}
+	}
+	return 0
 }

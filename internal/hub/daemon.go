@@ -19,7 +19,7 @@ import (
 type Daemon struct {
 	config        *Config
 	deviceManager *DeviceManager
-	gatewayClient *GatewayClient
+	workerService *WorkerService
 	logger        zerolog.Logger
 	running       bool
 	mutex         sync.RWMutex
@@ -52,8 +52,8 @@ func NewDaemon(configPath string, debug, testMode bool) (*Daemon, error) {
 	// Initialize device manager
 	daemon.deviceManager = NewDeviceManager(config)
 
-	// Initialize gateway client
-	daemon.gatewayClient = NewGatewayClient(config)
+	// Initialize worker service
+	daemon.workerService = NewWorkerService(config, daemon.deviceManager)
 
 	return daemon, nil
 }
@@ -78,22 +78,10 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to initialize devices: %w", err)
 	}
 
-	// Connect to gateway with retry logic for internet reliability
-	if err := d.gatewayClient.ConnectWithRetry(); err != nil {
-		return fmt.Errorf("failed to connect to gateway: %w", err)
+	// Start worker service to connect to gateway via Hermes
+	if err := d.workerService.Start(); err != nil {
+		return fmt.Errorf("failed to start worker service: %w", err)
 	}
-
-	// Perform ZMQ handshake (includes hub_online and device registration)
-	if err := d.gatewayClient.PerformHandshake(); err != nil {
-		return fmt.Errorf("ZMQ handshake failed: %w", err)
-	}
-
-	// Start gateway message listener in a goroutine
-	go func() {
-		if err := d.gatewayClient.Listen(d.handleGatewayMessage); err != nil {
-			d.logger.Error().Err(err).Msg("Gateway listener stopped with error")
-		}
-	}()
 
 	// Set up signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -135,9 +123,9 @@ func (d *Daemon) Stop() error {
 	// Cancel context to signal shutdown
 	d.cancel()
 
-	// Disconnect from gateway
-	if err := d.gatewayClient.Disconnect(); err != nil {
-		d.logger.Error().Err(err).Msg("Error disconnecting from gateway")
+	// Stop worker service
+	if err := d.workerService.Stop(); err != nil {
+		d.logger.Error().Err(err).Msg("Error stopping worker service")
 	}
 
 	// Shutdown device manager
@@ -233,15 +221,9 @@ func (d *Daemon) startHealthCheck() {
 func (d *Daemon) performHealthCheck() {
 	d.logger.Debug().Msg("Performing health check")
 
-	// Check gateway connectivity
-	if d.gatewayClient.IsConnected() {
-		if err := d.gatewayClient.Ping(); err != nil {
-			d.logger.Warn().
-				Err(err).
-				Msg("Gateway ping failed")
-		} else {
-			d.logger.Debug().Msg("Gateway connectivity OK")
-		}
+	// Check gateway connectivity via WorkerService
+	if d.workerService.IsConnected() {
+		d.logger.Debug().Msg("Gateway connectivity OK")
 	} else {
 		d.logger.Warn().Msg("Gateway not connected")
 	}
@@ -254,7 +236,7 @@ func (d *Daemon) performHealthCheck() {
 
 	// Log overall health status
 	d.logger.Info().
-		Bool("gateway_connected", d.gatewayClient.IsConnected()).
+		Bool("gateway_connected", d.workerService.IsConnected()).
 		Int("device_count", deviceCount).
 		Msg("Health check completed")
 }
@@ -275,7 +257,7 @@ func (d *Daemon) GetStatus() map[string]interface{} {
 		"running":           d.running,
 		"debug":             d.debug,
 		"test_mode":         d.testMode,
-		"gateway_connected": d.gatewayClient.IsConnected(),
+		"gateway_connected": d.workerService.IsConnected(),
 		"device_count":      d.deviceManager.GetDeviceCount(),
 		"devices":           d.deviceManager.GetAllDeviceInfo(),
 		"nonce_cache":       d.deviceManager.GetNonceStats(),
