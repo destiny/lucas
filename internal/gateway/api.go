@@ -67,6 +67,9 @@ func (api *APIServer) Start(address string) error {
 	// Health check
 	apiRouter.HandleFunc("/health", api.handleHealth).Methods("GET")
 
+	// Setup web app serving (must be last to catch all non-API routes)
+	api.SetupWebApp(router)
+
 	api.server = &http.Server{
 		Addr:         address,
 		Handler:      router,
