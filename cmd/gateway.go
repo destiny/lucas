@@ -74,8 +74,10 @@ The gateway provides a central point for managing distributed IoT devices across
 		// Initialize Hermes Broker Service
 		brokerService := gateway.NewBrokerService(config.Server.ZMQ.Address, keys, database)
 
-		// Initialize API server
-		apiServer := gateway.NewAPIServer(database, brokerService, keys)
+		// Initialize API server with JWT secret
+		// TODO: Move JWT secret to configuration file
+		jwtSecret := "your-super-secret-jwt-key-change-this-in-production"
+		apiServer := gateway.NewAPIServer(database, brokerService, keys, jwtSecret)
 
 		// Start services
 		var wg sync.WaitGroup

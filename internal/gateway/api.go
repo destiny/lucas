@@ -14,20 +14,30 @@ import (
 
 // APIServer handles REST API requests
 type APIServer struct {
-	database      *Database
-	brokerService *BrokerService
-	keys          *GatewayKeys
-	logger        zerolog.Logger
-	server        *http.Server
+	database        *Database
+	brokerService   *BrokerService
+	keys            *GatewayKeys
+	logger          zerolog.Logger
+	server          *http.Server
+	jwtService      *JWTService
+	passwordService *PasswordService
+	authMiddleware  *AuthMiddleware
 }
 
 // NewAPIServer creates a new API server
-func NewAPIServer(database *Database, brokerService *BrokerService, keys *GatewayKeys) *APIServer {
+func NewAPIServer(database *Database, brokerService *BrokerService, keys *GatewayKeys, jwtSecret string) *APIServer {
+	jwtService := NewJWTService(jwtSecret, "lucas-gateway")
+	passwordService := NewPasswordService()
+	authMiddleware := NewAuthMiddleware(jwtService, database)
+
 	return &APIServer{
-		database:      database,
-		brokerService: brokerService,
-		keys:          keys,
-		logger:        logger.New(),
+		database:        database,
+		brokerService:   brokerService,
+		keys:            keys,
+		logger:          logger.New(),
+		jwtService:      jwtService,
+		passwordService: passwordService,
+		authMiddleware:  authMiddleware,
 	}
 }
 
@@ -53,16 +63,21 @@ func (api *APIServer) Start(address string) error {
 	// Hub claiming endpoint
 	apiRouter.HandleFunc("/hub/claim", api.handleHubClaim).Methods("POST")
 
-	// User endpoints
-	apiRouter.HandleFunc("/users", api.handleCreateUser).Methods("POST")
-	apiRouter.HandleFunc("/users/{user_id}/hubs", api.handleGetUserHubs).Methods("GET")
-	apiRouter.HandleFunc("/users/{user_id}/devices", api.handleGetUserDevices).Methods("GET")
-	apiRouter.HandleFunc("/users/{user_id}/devices/{device_id}/action", api.handleDeviceAction).Methods("POST")
+	// User endpoints (protected)
+	apiRouter.HandleFunc("/users", api.handleCreateUser).Methods("POST") // Keep public for admin/demo purposes
+	apiRouter.Handle("/users/{user_id}/hubs", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleGetUserHubs))).Methods("GET")
+	apiRouter.Handle("/users/{user_id}/devices", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleGetUserDevices))).Methods("GET")
+	apiRouter.Handle("/users/{user_id}/devices/{device_id}/action", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleDeviceAction))).Methods("POST")
 
 	// Admin endpoints (no auth for demo)
 	apiRouter.HandleFunc("/admin/users", api.handleListUsers).Methods("GET")
 	apiRouter.HandleFunc("/admin/hubs", api.handleListHubs).Methods("GET")
 	apiRouter.HandleFunc("/admin/devices", api.handleListDevices).Methods("GET")
+
+	// Authentication endpoints
+	apiRouter.HandleFunc("/auth/register", api.handleRegister).Methods("POST")
+	apiRouter.HandleFunc("/auth/login", api.handleLogin).Methods("POST")
+	apiRouter.Handle("/auth/me", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleGetCurrentUser))).Methods("GET")
 
 	// Health check
 	apiRouter.HandleFunc("/health", api.handleHealth).Methods("GET")
@@ -336,13 +351,26 @@ func (api *APIServer) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 
 func (api *APIServer) handleGetUserHubs(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	userID, err := strconv.Atoi(vars["user_id"])
+	requestedUserID, err := strconv.Atoi(vars["user_id"])
 	if err != nil {
 		api.sendError(w, http.StatusBadRequest, "Invalid user ID")
 		return
 	}
 
-	hubs, err := api.database.GetUserHubs(userID)
+	// Get authenticated user from context
+	authUser, ok := GetUserFromContext(r)
+	if !ok {
+		api.sendError(w, http.StatusUnauthorized, "User not found in context")
+		return
+	}
+
+	// Check if user can access this resource (users can only access their own data)
+	if authUser.ID != requestedUserID {
+		api.sendError(w, http.StatusForbidden, "Access denied: can only access your own data")
+		return
+	}
+
+	hubs, err := api.database.GetUserHubs(requestedUserID)
 	if err != nil {
 		api.logger.Error().Err(err).Msg("Failed to get user hubs")
 		api.sendError(w, http.StatusInternalServerError, "Failed to get hubs")
@@ -357,13 +385,26 @@ func (api *APIServer) handleGetUserHubs(w http.ResponseWriter, r *http.Request) 
 
 func (api *APIServer) handleGetUserDevices(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	userID, err := strconv.Atoi(vars["user_id"])
+	requestedUserID, err := strconv.Atoi(vars["user_id"])
 	if err != nil {
 		api.sendError(w, http.StatusBadRequest, "Invalid user ID")
 		return
 	}
 
-	devices, err := api.database.GetUserDevices(userID)
+	// Get authenticated user from context
+	authUser, ok := GetUserFromContext(r)
+	if !ok {
+		api.sendError(w, http.StatusUnauthorized, "User not found in context")
+		return
+	}
+
+	// Check if user can access this resource
+	if authUser.ID != requestedUserID {
+		api.sendError(w, http.StatusForbidden, "Access denied: can only access your own data")
+		return
+	}
+
+	devices, err := api.database.GetUserDevices(requestedUserID)
 	if err != nil {
 		api.logger.Error().Err(err).Msg("Failed to get user devices")
 		api.sendError(w, http.StatusInternalServerError, "Failed to get devices")
@@ -378,12 +419,25 @@ func (api *APIServer) handleGetUserDevices(w http.ResponseWriter, r *http.Reques
 
 func (api *APIServer) handleDeviceAction(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	userID, err := strconv.Atoi(vars["user_id"])
+	requestedUserID, err := strconv.Atoi(vars["user_id"])
 	if err != nil {
 		api.sendError(w, http.StatusBadRequest, "Invalid user ID")
 		return
 	}
 	deviceID := vars["device_id"]
+
+	// Get authenticated user from context
+	authUser, ok := GetUserFromContext(r)
+	if !ok {
+		api.sendError(w, http.StatusUnauthorized, "User not found in context")
+		return
+	}
+
+	// Check if user can access this resource
+	if authUser.ID != requestedUserID {
+		api.sendError(w, http.StatusForbidden, "Access denied: can only access your own data")
+		return
+	}
 
 	// Parse action request
 	var actionReq struct {
@@ -404,8 +458,8 @@ func (api *APIServer) handleDeviceAction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Verify device belongs to user
-	if !deviceHub.UserID.Valid || int(deviceHub.UserID.Int32) != userID {
+	// Verify device belongs to authenticated user
+	if !deviceHub.UserID.Valid || int(deviceHub.UserID.Int32) != authUser.ID {
 		api.sendError(w, http.StatusForbidden, "Device not accessible by user")
 		return
 	}
@@ -500,4 +554,183 @@ func getActiveHubCount(stats map[string]interface{}) int {
 		}
 	}
 	return 0
+}
+
+// Authentication endpoints
+func (api *APIServer) handleRegister(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	// Validate required fields
+	if req.Username == "" {
+		api.sendError(w, http.StatusBadRequest, "Username is required")
+		return
+	}
+	if req.Email == "" {
+		api.sendError(w, http.StatusBadRequest, "Email is required")
+		return
+	}
+	if req.Password == "" {
+		api.sendError(w, http.StatusBadRequest, "Password is required")
+		return
+	}
+	if len(req.Password) < 6 {
+		api.sendError(w, http.StatusBadRequest, "Password must be at least 6 characters long")
+		return
+	}
+
+	// Hash the password
+	hashedPassword, err := api.passwordService.HashPassword(req.Password)
+	if err != nil {
+		api.logger.Error().Err(err).Msg("Failed to hash password")
+		api.sendError(w, http.StatusInternalServerError, "Failed to process password")
+		return
+	}
+
+	// Create user
+	user, err := api.database.CreateUserWithPassword(req.Username, req.Email, hashedPassword)
+	if err != nil {
+		api.logger.Error().Err(err).Str("username", req.Username).Msg("Failed to create user")
+		api.sendError(w, http.StatusConflict, "Username already exists or registration failed")
+		return
+	}
+
+	// Generate JWT token
+	token, err := api.jwtService.GenerateToken(user)
+	if err != nil {
+		api.logger.Error().Err(err).Int("user_id", user.ID).Msg("Failed to generate token")
+		api.sendError(w, http.StatusInternalServerError, "Failed to generate authentication token")
+		return
+	}
+
+	api.logger.Info().
+		Int("user_id", user.ID).
+		Str("username", user.Username).
+		Str("email", user.Email).
+		Msg("User registered successfully")
+
+	response := map[string]interface{}{
+		"success": true,
+		"message": "User registered successfully",
+		"user":    user,
+		"token":   token,
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	api.sendJSON(w, http.StatusCreated, response)
+}
+
+func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	// Validate required fields
+	if req.Username == "" && req.Email == "" {
+		api.sendError(w, http.StatusBadRequest, "Username or email is required")
+		return
+	}
+	if req.Password == "" {
+		api.sendError(w, http.StatusBadRequest, "Password is required")
+		return
+	}
+
+	// Find user by username or email
+	var user *User
+	var err error
+	if req.Username != "" {
+		user, err = api.database.GetUserByUsername(req.Username)
+	} else {
+		user, err = api.database.GetUserByEmail(req.Email)
+	}
+
+	if err != nil {
+		api.logger.Debug().
+			Str("username", req.Username).
+			Str("email", req.Email).
+			Err(err).
+			Msg("User not found during login attempt")
+		api.sendError(w, http.StatusUnauthorized, "Invalid username/email or password")
+		return
+	}
+
+	// Verify password
+	if user.PasswordHash == "" {
+		api.logger.Warn().
+			Int("user_id", user.ID).
+			Str("username", user.Username).
+			Msg("User has no password hash set")
+		api.sendError(w, http.StatusUnauthorized, "Invalid username/email or password")
+		return
+	}
+
+	valid, err := api.passwordService.VerifyPassword(req.Password, user.PasswordHash)
+	if err != nil {
+		api.logger.Error().Err(err).Int("user_id", user.ID).Msg("Failed to verify password")
+		api.sendError(w, http.StatusInternalServerError, "Authentication failed")
+		return
+	}
+
+	if !valid {
+		api.logger.Debug().
+			Int("user_id", user.ID).
+			Str("username", user.Username).
+			Msg("Invalid password during login attempt")
+		api.sendError(w, http.StatusUnauthorized, "Invalid username/email or password")
+		return
+	}
+
+	// Generate JWT token
+	token, err := api.jwtService.GenerateToken(user)
+	if err != nil {
+		api.logger.Error().Err(err).Int("user_id", user.ID).Msg("Failed to generate token")
+		api.sendError(w, http.StatusInternalServerError, "Failed to generate authentication token")
+		return
+	}
+
+	api.logger.Info().
+		Int("user_id", user.ID).
+		Str("username", user.Username).
+		Msg("User logged in successfully")
+
+	response := map[string]interface{}{
+		"success": true,
+		"message": "Login successful",
+		"user":    user,
+		"token":   token,
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	api.sendJSON(w, http.StatusOK, response)
+}
+
+func (api *APIServer) handleGetCurrentUser(w http.ResponseWriter, r *http.Request) {
+	user, ok := GetUserFromContext(r)
+	if !ok {
+		api.sendError(w, http.StatusUnauthorized, "User not found in context")
+		return
+	}
+
+	response := map[string]interface{}{
+		"success": true,
+		"user":    user,
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	api.sendJSON(w, http.StatusOK, response)
 }

@@ -13,11 +13,12 @@ import (
 
 // Database models
 type User struct {
-	ID        int       `json:"id"`
-	Username  string    `json:"username"`
-	Email     string    `json:"email"`
-	APIKey    string    `json:"api_key"`
-	CreatedAt time.Time `json:"created_at"`
+	ID           int       `json:"id"`
+	Username     string    `json:"username"`
+	Email        string    `json:"email"`
+	PasswordHash string    `json:"-"` // Don't include in JSON response
+	APIKey       string    `json:"api_key"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type Hub struct {
@@ -82,6 +83,7 @@ func (d *Database) initSchema() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username TEXT UNIQUE NOT NULL,
 			email TEXT,
+			password_hash TEXT NOT NULL,
 			api_key TEXT UNIQUE NOT NULL,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -123,15 +125,72 @@ func (d *Database) initSchema() error {
 		}
 	}
 
+	// Handle migration for existing databases - add password_hash if it doesn't exist
+	if err := d.migratePasswordHash(); err != nil {
+		return fmt.Errorf("failed to migrate password hash: %w", err)
+	}
+
 	return nil
 }
 
-// User operations
+// migratePasswordHash adds password_hash column to existing users table if it doesn't exist
+func (d *Database) migratePasswordHash() error {
+	// Check if password_hash column exists
+	checkQuery := `PRAGMA table_info(users)`
+	rows, err := d.db.Query(checkQuery)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasPasswordHash := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, dfltValue, pk interface{}
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dfltValue, &pk); err != nil {
+			return err
+		}
+		if name == "password_hash" {
+			hasPasswordHash = true
+			break
+		}
+	}
+
+	// Add column if it doesn't exist
+	if !hasPasswordHash {
+		_, err := d.db.Exec(`ALTER TABLE users ADD COLUMN password_hash TEXT DEFAULT ''`)
+		return err
+	}
+
+	return nil
+}
+
+// User operations (DEPRECATED: use CreateUserWithPassword for new registrations)
 func (d *Database) CreateUser(username, email string) (*User, error) {
 	apiKey := uuid.New().String()
 	
-	query := `INSERT INTO users (username, email, api_key) VALUES (?, ?, ?)`
-	result, err := d.db.Exec(query, username, email, apiKey)
+	// For backwards compatibility, set an empty password hash (user must reset password)
+	query := `INSERT INTO users (username, email, password_hash, api_key) VALUES (?, ?, ?, ?)`
+	result, err := d.db.Exec(query, username, email, "", apiKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create user: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user ID: %w", err)
+	}
+
+	return d.GetUser(int(id))
+}
+
+// CreateUserWithPassword creates a new user with username, email, and password hash
+func (d *Database) CreateUserWithPassword(username, email, passwordHash string) (*User, error) {
+	apiKey := uuid.New().String()
+	
+	query := `INSERT INTO users (username, email, password_hash, api_key) VALUES (?, ?, ?, ?)`
+	result, err := d.db.Exec(query, username, email, passwordHash, apiKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
@@ -145,11 +204,11 @@ func (d *Database) CreateUser(username, email string) (*User, error) {
 }
 
 func (d *Database) GetUser(id int) (*User, error) {
-	query := `SELECT id, username, email, api_key, created_at FROM users WHERE id = ?`
+	query := `SELECT id, username, email, password_hash, api_key, created_at FROM users WHERE id = ?`
 	
 	var user User
 	err := d.db.QueryRow(query, id).Scan(
-		&user.ID, &user.Username, &user.Email, &user.APIKey, &user.CreatedAt,
+		&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.APIKey, &user.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %w", err)
@@ -159,14 +218,44 @@ func (d *Database) GetUser(id int) (*User, error) {
 }
 
 func (d *Database) GetUserByAPIKey(apiKey string) (*User, error) {
-	query := `SELECT id, username, email, api_key, created_at FROM users WHERE api_key = ?`
+	query := `SELECT id, username, email, password_hash, api_key, created_at FROM users WHERE api_key = ?`
 	
 	var user User
 	err := d.db.QueryRow(query, apiKey).Scan(
-		&user.ID, &user.Username, &user.Email, &user.APIKey, &user.CreatedAt,
+		&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.APIKey, &user.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user by API key: %w", err)
+	}
+
+	return &user, nil
+}
+
+// GetUserByUsername retrieves a user by username for authentication
+func (d *Database) GetUserByUsername(username string) (*User, error) {
+	query := `SELECT id, username, email, password_hash, api_key, created_at FROM users WHERE username = ?`
+	
+	var user User
+	err := d.db.QueryRow(query, username).Scan(
+		&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.APIKey, &user.CreatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user by username: %w", err)
+	}
+
+	return &user, nil
+}
+
+// GetUserByEmail retrieves a user by email for authentication
+func (d *Database) GetUserByEmail(email string) (*User, error) {
+	query := `SELECT id, username, email, password_hash, api_key, created_at FROM users WHERE email = ?`
+	
+	var user User
+	err := d.db.QueryRow(query, email).Scan(
+		&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.APIKey, &user.CreatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user by email: %w", err)
 	}
 
 	return &user, nil
