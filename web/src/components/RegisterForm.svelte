@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { auth } from '$lib/auth';
+  import { auth } from '../lib/auth';
 
   let username = '';
   let email = '';
   let password = '';
   let confirmPassword = '';
   let error = '';
+  let success = '';
   let isLoading = false;
 
   async function handleSubmit() {
@@ -35,6 +36,7 @@
     }
 
     error = '';
+    success = '';
     isLoading = true;
 
     try {
@@ -42,6 +44,15 @@
 
       if (!result.success) {
         error = result.error || 'Registration failed';
+        // Form fields are preserved on error for user convenience
+      } else {
+        success = 'Account created successfully! You are now logged in and will be redirected to the dashboard.';
+        // Form will be hidden automatically as user is now authenticated
+        // Clear form fields only on success
+        username = '';
+        email = '';
+        password = '';
+        confirmPassword = '';
       }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Registration failed';
@@ -119,6 +130,10 @@
       <div class="error">{error}</div>
     {/if}
 
+    {#if success}
+      <div class="success">{success}</div>
+    {/if}
+
     <button type="submit" disabled={isLoading}>
       {isLoading ? 'Creating Account...' : 'Create Account'}
     </button>
@@ -178,6 +193,16 @@
     border-radius: 4px;
     margin-bottom: 1rem;
     border-left: 4px solid #d32f2f;
+  }
+
+  .success {
+    color: #2e7d32;
+    background: #e8f5e8;
+    padding: 0.75rem;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+    border-left: 4px solid #4caf50;
+    text-align: center;
   }
 
   button[type="submit"] {

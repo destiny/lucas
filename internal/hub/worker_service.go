@@ -114,6 +114,8 @@ func (ws *WorkerService) Start() error {
 	// Start monitoring
 	go ws.monitorWorkers()
 
+	// Gateway will auto-detect the hub service when worker registers
+
 	ws.logger.Info().
 		Int("registered_services", len(ws.workers)).
 		Msg("Hub Worker Service started successfully")
@@ -283,13 +285,24 @@ func (ws *WorkerService) updateWorkerStats() {
 	for serviceName, worker := range ws.workers {
 		if serviceStats, exists := ws.stats.ServiceStats[serviceName]; exists {
 			workerStats := worker.GetStats()
+			wasConnected := serviceStats.IsConnected
+			isConnected := worker.IsConnected()
+			
 			serviceStats.RequestsHandled = workerStats.RequestsHandled
 			serviceStats.RequestsFailed = workerStats.RequestsFailed
 			serviceStats.LastRequest = workerStats.LastRequest
-			serviceStats.IsConnected = worker.IsConnected()
+			serviceStats.IsConnected = isConnected
+			
+			// Detect reconnection after disconnection 
+			if !wasConnected && isConnected {
+				ws.logger.Info().
+					Str("service", serviceName).
+					Msg("Worker reconnected - gateway will auto-detect")
+			}
 		}
 	}
 }
+
 
 // DeviceServiceHandler methods
 

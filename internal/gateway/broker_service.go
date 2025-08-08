@@ -112,6 +112,8 @@ func (bs *BrokerService) Start() error {
 		return fmt.Errorf("failed to start Hermes broker: %w", err)
 	}
 
+	// Hub services will announce themselves when they connect
+
 	// Start service monitoring
 	go bs.monitorServices()
 
@@ -346,6 +348,7 @@ func (bs *BrokerService) monitorServices() {
 		select {
 		case <-ticker.C:
 			bs.checkServiceHealth()
+			bs.syncWorkerRegistrations()
 			bs.cleanupStaleServices()
 		case <-bs.ctx.Done():
 			bs.logger.Info().Msg("Service monitoring stopping")
@@ -362,16 +365,103 @@ func (bs *BrokerService) checkServiceHealth() {
 	for serviceName, serviceInfo := range services {
 		// Update service health based on worker status
 		activeWorkers := 0
+		var activeHubIDs []string
+
 		for _, workerID := range serviceInfo.Workers {
 			if worker, exists := workers[workerID]; exists {
 				if time.Since(worker.LastPing) < 60*time.Second {
 					activeWorkers++
+					// For hub.control service, workerID is the hub ID
+					if serviceName == "hub.control" {
+						activeHubIDs = append(activeHubIDs, workerID)
+					}
 				}
 			}
 		}
 
 		// Update registry with health information
 		bs.registry.UpdateServiceHealth(serviceName, activeWorkers > 0)
+
+		// Update hub status in database for hub.control services
+		if serviceName == "hub.control" {
+			for _, hubID := range activeHubIDs {
+				if err := bs.database.UpdateHubStatus(hubID, "online"); err != nil {
+					bs.logger.Warn().
+						Str("hub_id", hubID).
+						Err(err).
+						Msg("Failed to update hub status in database")
+				}
+			}
+		}
+	}
+}
+
+// syncWorkerRegistrations tracks available services for routing
+func (bs *BrokerService) syncWorkerRegistrations() {
+	services := bs.broker.GetServices()
+	workers := bs.broker.GetWorkers()
+
+	// Track which hubs are currently available
+	availableHubs := make(map[string]bool)
+
+	// Update service availability for hub.control services
+	if serviceInfo, exists := services["hub.control"]; exists {
+		for _, workerID := range serviceInfo.Workers {
+			if worker, workerExists := workers[workerID]; workerExists {
+				// Check if worker is active (recent heartbeat)
+				if time.Since(worker.LastPing) < 90*time.Second {
+					availableHubs[workerID] = true
+					
+					// Check if this is a newly available hub
+					bs.mutex.RLock()
+					_, wasKnown := bs.hubHandlers[workerID]
+					bs.mutex.RUnlock()
+					
+					if !wasKnown {
+						// New hub detected - process service announcement
+						bs.handleServiceAnnouncement(workerID)
+					}
+				}
+			}
+		}
+	}
+
+	// Log available hubs for routing
+	if len(availableHubs) > 0 {
+		bs.logger.Debug().
+			Int("available_hubs", len(availableHubs)).
+			Msg("Hub services available for routing")
+	}
+}
+
+// handleServiceAnnouncement processes service ready announcements from hubs
+func (bs *BrokerService) handleServiceAnnouncement(hubID string) {
+	bs.logger.Info().
+		Str("hub_id", hubID).
+		Msg("Hub service announced - available for routing")
+
+	// Create a simple hub handler for routing (no database dependency)
+	handler := &HubServiceHandler{
+		hubID:    hubID,
+		database: bs.database,
+		registry: bs.registry,
+		logger:   bs.logger,
+	}
+
+	bs.mutex.Lock()
+	bs.hubHandlers[hubID] = handler
+	bs.mutex.Unlock()
+
+	// Update hub status in database (now uses select-insert-select pattern for race condition tolerance)
+	if err := bs.database.UpdateHubStatus(hubID, "online"); err != nil {
+		bs.logger.Warn().
+			Str("hub_id", hubID).
+			Err(err).
+			Msg("Failed to update hub status in database")
+	} else {
+		bs.logger.Debug().
+			Str("hub_id", hubID).
+			Msg("Hub status updated to online")
 	}
 }
 
@@ -380,6 +470,7 @@ func (bs *BrokerService) cleanupStaleServices() {
 	cutoff := time.Now().Add(-5 * time.Minute) // 5 minutes
 	bs.registry.RemoveStaleServices(cutoff)
 }
+
 
 // extractCapabilities extracts unique capabilities from devices
 func extractCapabilities(devices []ServiceDeviceInfo) []string {

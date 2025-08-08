@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -25,8 +25,8 @@ type APIServer struct {
 }
 
 // NewAPIServer creates a new API server
-func NewAPIServer(database *Database, brokerService *BrokerService, keys *GatewayKeys, jwtSecret string) *APIServer {
-	jwtService := NewJWTService(jwtSecret, "lucas-gateway")
+func NewAPIServer(database *Database, brokerService *BrokerService, keys *GatewayKeys, config *GatewayConfig) *APIServer {
+	jwtService := NewJWTService(config.Security.JWT.SecretKey, config.Security.JWT.Issuer, config.Security.JWT.ExpiryHours)
 	passwordService := NewPasswordService()
 	authMiddleware := NewAuthMiddleware(jwtService, database)
 
@@ -60,14 +60,18 @@ func (api *APIServer) Start(address string) error {
 	// Hub registration endpoint
 	apiRouter.HandleFunc("/hub/register", api.handleHubRegister).Methods("POST")
 	
-	// Hub claiming endpoint
-	apiRouter.HandleFunc("/hub/claim", api.handleHubClaim).Methods("POST")
+	// Note: Hub claiming is now handled via JWT-protected /user/hubs/claim endpoint
 
-	// User endpoints (protected)
+	// User endpoints (protected with JWT authentication)
+	// Note: All /user/* endpoints use JWT tokens to identify the user - no user_id in URL needed
 	apiRouter.HandleFunc("/users", api.handleCreateUser).Methods("POST") // Keep public for admin/demo purposes
-	apiRouter.Handle("/users/{user_id}/hubs", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleGetUserHubs))).Methods("GET")
-	apiRouter.Handle("/users/{user_id}/devices", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleGetUserDevices))).Methods("GET")
-	apiRouter.Handle("/users/{user_id}/devices/{device_id}/action", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleDeviceAction))).Methods("POST")
+	apiRouter.Handle("/user/hubs", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleGetUserHubs))).Methods("GET")
+	apiRouter.Handle("/user/hubs/claim", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleUserHubClaim))).Methods("POST")
+	apiRouter.Handle("/user/devices", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleGetUserDevices))).Methods("GET")
+	apiRouter.Handle("/user/devices/{device_id}/action", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleDeviceAction))).Methods("POST")
+	
+	// Debug logging for route registration
+	api.logger.Info().Msg("User hub claim endpoint registered at /api/v1/user/hubs/claim")
 
 	// Admin endpoints (no auth for demo)
 	apiRouter.HandleFunc("/admin/users", api.handleListUsers).Methods("GET")
@@ -209,6 +213,10 @@ func (api *APIServer) handleHubRegister(w http.ResponseWriter, r *http.Request) 
 		api.sendError(w, http.StatusBadRequest, "Public key is required")
 		return
 	}
+	if req.ProductKey == "" {
+		api.sendError(w, http.StatusBadRequest, "Product key is required")
+		return
+	}
 
 	// Validate public key format (CurveZMQ keys are 40 characters)
 	if len(req.PublicKey) != 40 {
@@ -221,9 +229,18 @@ func (api *APIServer) handleHubRegister(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		api.logger.Error().
 			Str("hub_id", req.HubID).
+			Str("product_key", req.ProductKey).
 			Err(err).
 			Msg("Failed to register hub")
-		api.sendError(w, http.StatusInternalServerError, "Failed to register hub")
+		
+		// Provide specific error messages for common failures
+		if strings.Contains(err.Error(), "already registered") {
+			api.sendError(w, http.StatusConflict, err.Error())
+		} else if strings.Contains(err.Error(), "product key") && strings.Contains(err.Error(), "required") {
+			api.sendError(w, http.StatusBadRequest, err.Error())
+		} else {
+			api.sendError(w, http.StatusInternalServerError, "Failed to register hub")
+		}
 		return
 	}
 
@@ -243,9 +260,15 @@ func (api *APIServer) handleHubRegister(w http.ResponseWriter, r *http.Request) 
 	api.sendJSON(w, http.StatusCreated, response)
 }
 
-func (api *APIServer) handleHubClaim(w http.ResponseWriter, r *http.Request) {
+// handleHubClaim is deprecated - use /user/hubs/claim with JWT authentication instead
+// This endpoint was removed for security reasons to prevent unauthorized hub claiming
+// All hub claiming should go through the JWT-protected user endpoints
+
+// handleUserHubClaim handles hub claiming for authenticated users (JWT protected)
+func (api *APIServer) handleUserHubClaim(w http.ResponseWriter, r *http.Request) {
+	api.logger.Info().Msg("User hub claim request received")
+	
 	var req struct {
-		UserID     int    `json:"user_id"`
 		ProductKey string `json:"product_key"`
 	}
 
@@ -255,68 +278,129 @@ func (api *APIServer) handleHubClaim(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate required fields
-	if req.UserID == 0 {
-		api.sendError(w, http.StatusBadRequest, "User ID is required")
-		return
-	}
 	if req.ProductKey == "" {
 		api.sendError(w, http.StatusBadRequest, "Product key is required")
 		return
 	}
 
+	// Validate product key format (should not be empty or just whitespace)
+	if strings.TrimSpace(req.ProductKey) == "" {
+		api.sendError(w, http.StatusBadRequest, "Product key cannot be empty or whitespace")
+		return
+	}
+
+	// Get user from JWT context (set by auth middleware)
+	user, ok := r.Context().Value("user").(*User)
+	if !ok {
+		api.sendError(w, http.StatusUnauthorized, "Invalid authentication context")
+		return
+	}
+
+	// Log the claim attempt for debugging
+	api.logger.Info().
+		Str("username", user.Username).
+		Int("user_id", user.ID).
+		Str("product_key", req.ProductKey).
+		Msg("User attempting to claim hub")
+
 	// Find hub by product key
 	hub, err := api.database.GetHubByProductKey(req.ProductKey)
 	if err != nil {
-		api.sendError(w, http.StatusNotFound, "Hub not found with provided product key")
+		api.logger.Warn().
+			Str("username", user.Username).
+			Int("user_id", user.ID).
+			Str("product_key", req.ProductKey).
+			Err(err).
+			Msg("Hub not found for product key during claim attempt")
+		api.sendError(w, http.StatusNotFound, "Hub not found with provided product key. Please check the product key and ensure the hub is registered with the gateway.")
 		return
 	}
 
-	// Check if hub is already claimed
-	if hub.UserID.Valid && hub.UserID.Int32 != 0 && !hub.AutoRegistered {
-		api.sendError(w, http.StatusConflict, "Hub is already claimed by another user")
-		return
-	}
-
-	// Verify user exists
-	user, err := api.database.GetUser(req.UserID)
-	if err != nil {
-		api.sendError(w, http.StatusNotFound, "User not found")
-		return
+	// Check if hub is already claimed by another user
+	if hub.UserID.Valid && hub.UserID.Int32 != 0 {
+		if int(hub.UserID.Int32) == user.ID {
+			// User is trying to claim their own hub - return success
+			api.logger.Info().
+				Str("hub_id", hub.HubID).
+				Int("user_id", user.ID).
+				Str("username", user.Username).
+				Msg("User attempted to claim already owned hub")
+			
+			response := map[string]interface{}{
+				"success":   true,
+				"message":   "Hub is already claimed by you",
+				"hub_id":    hub.HubID,
+				"name":      hub.Name,
+				"id":        hub.ID,
+				"user":      user.Username,
+				"timestamp": time.Now().UTC().Format(time.RFC3339),
+			}
+			api.sendJSON(w, http.StatusOK, response)
+			return
+		} else if !hub.AutoRegistered {
+			// Hub is claimed by another user and it's a permanent claim
+			api.logger.Warn().
+				Str("hub_id", hub.HubID).
+				Int("requesting_user_id", user.ID).
+				Int("owner_user_id", int(hub.UserID.Int32)).
+				Str("product_key", req.ProductKey).
+				Msg("User attempted to claim hub owned by another user")
+			api.sendError(w, http.StatusConflict, "This hub is already claimed by another user. If you believe this is incorrect, please contact support.")
+			return
+		}
+		// If hub.AutoRegistered is true, allow the claim to proceed (re-claiming from auto registration)
 	}
 
 	// Claim the hub - update user_id and set auto_registered to false
-	if err := api.database.ClaimHub(hub.HubID, req.UserID); err != nil {
+	api.logger.Info().
+		Str("hub_id", hub.HubID).
+		Int("user_id", user.ID).
+		Str("username", user.Username).
+		Str("hub_name", hub.Name).
+		Bool("was_auto_registered", hub.AutoRegistered).
+		Msg("Proceeding to claim hub")
+	
+	// Claim the hub - update user_id and set auto_registered to false
+	if err := api.database.ClaimHub(hub.HubID, user.ID); err != nil {
 		api.logger.Error().
 			Str("hub_id", hub.HubID).
-			Int("user_id", req.UserID).
+			Int("user_id", user.ID).
+			Str("username", user.Username).
 			Err(err).
-			Msg("Failed to claim hub")
-		api.sendError(w, http.StatusInternalServerError, "Failed to claim hub")
+			Msg("Database error while claiming hub")
+		api.sendError(w, http.StatusInternalServerError, "Failed to claim hub due to database error. Please try again.")
 		return
 	}
 
 	// Update devices to link to the user
-	if err := api.database.UpdateDevicesUserID(hub.ID, req.UserID); err != nil {
+	if err := api.database.UpdateDevicesUserID(hub.ID, user.ID); err != nil {
 		api.logger.Error().
 			Str("hub_id", hub.HubID).
-			Int("user_id", req.UserID).
+			Int("hub_db_id", hub.ID).
+			Int("user_id", user.ID).
+			Str("username", user.Username).
 			Err(err).
-			Msg("Failed to update device ownership")
-		// Don't fail the request, just log the warning
+			Msg("Failed to update device ownership after hub claim - hub claimed successfully but device ownership not updated")
+		// Don't fail the request, just log the warning as this is not critical
 	}
 
 	api.logger.Info().
 		Str("hub_id", hub.HubID).
-		Int("user_id", req.UserID).
+		Int("user_id", user.ID).
 		Str("username", user.Username).
-		Msg("Hub claimed successfully")
+		Str("hub_name", hub.Name).
+		Str("product_key", req.ProductKey).
+		Msg("Hub claimed successfully via user endpoint")
 
 	response := map[string]interface{}{
-		"success":   true,
-		"message":   "Hub claimed successfully",
-		"hub_id":    hub.HubID,
-		"user":      user.Username,
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"success":     true,
+		"message":     fmt.Sprintf("Hub '%s' has been successfully claimed and linked to your account", hub.Name),
+		"hub_id":      hub.HubID,
+		"name":        hub.Name,
+		"id":          hub.ID,
+		"user":        user.Username,
+		"product_key": req.ProductKey,
+		"timestamp":   time.Now().UTC().Format(time.RFC3339),
 	}
 
 	api.sendJSON(w, http.StatusOK, response)
@@ -350,13 +434,6 @@ func (api *APIServer) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *APIServer) handleGetUserHubs(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	requestedUserID, err := strconv.Atoi(vars["user_id"])
-	if err != nil {
-		api.sendError(w, http.StatusBadRequest, "Invalid user ID")
-		return
-	}
-
 	// Get authenticated user from context
 	authUser, ok := GetUserFromContext(r)
 	if !ok {
@@ -364,13 +441,7 @@ func (api *APIServer) handleGetUserHubs(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Check if user can access this resource (users can only access their own data)
-	if authUser.ID != requestedUserID {
-		api.sendError(w, http.StatusForbidden, "Access denied: can only access your own data")
-		return
-	}
-
-	hubs, err := api.database.GetUserHubs(requestedUserID)
+	hubs, err := api.database.GetUserHubs(authUser.ID)
 	if err != nil {
 		api.logger.Error().Err(err).Msg("Failed to get user hubs")
 		api.sendError(w, http.StatusInternalServerError, "Failed to get hubs")
@@ -384,13 +455,6 @@ func (api *APIServer) handleGetUserHubs(w http.ResponseWriter, r *http.Request) 
 }
 
 func (api *APIServer) handleGetUserDevices(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	requestedUserID, err := strconv.Atoi(vars["user_id"])
-	if err != nil {
-		api.sendError(w, http.StatusBadRequest, "Invalid user ID")
-		return
-	}
-
 	// Get authenticated user from context
 	authUser, ok := GetUserFromContext(r)
 	if !ok {
@@ -398,13 +462,7 @@ func (api *APIServer) handleGetUserDevices(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Check if user can access this resource
-	if authUser.ID != requestedUserID {
-		api.sendError(w, http.StatusForbidden, "Access denied: can only access your own data")
-		return
-	}
-
-	devices, err := api.database.GetUserDevices(requestedUserID)
+	devices, err := api.database.GetUserDevices(authUser.ID)
 	if err != nil {
 		api.logger.Error().Err(err).Msg("Failed to get user devices")
 		api.sendError(w, http.StatusInternalServerError, "Failed to get devices")
@@ -419,23 +477,12 @@ func (api *APIServer) handleGetUserDevices(w http.ResponseWriter, r *http.Reques
 
 func (api *APIServer) handleDeviceAction(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	requestedUserID, err := strconv.Atoi(vars["user_id"])
-	if err != nil {
-		api.sendError(w, http.StatusBadRequest, "Invalid user ID")
-		return
-	}
 	deviceID := vars["device_id"]
 
 	// Get authenticated user from context
 	authUser, ok := GetUserFromContext(r)
 	if !ok {
 		api.sendError(w, http.StatusUnauthorized, "User not found in context")
-		return
-	}
-
-	// Check if user can access this resource
-	if authUser.ID != requestedUserID {
-		api.sendError(w, http.StatusForbidden, "Access denied: can only access your own data")
 		return
 	}
 

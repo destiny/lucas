@@ -67,7 +67,15 @@ type LoggingConfig struct {
 // SecurityConfig contains security-related settings
 type SecurityConfig struct {
 	APIKeyRequired bool          `yaml:"api_key_required"`
-	RateLimiting   RateLimiting `yaml:"rate_limiting"`
+	RateLimiting   RateLimiting  `yaml:"rate_limiting"`
+	JWT            JWTConfig     `yaml:"jwt"`
+}
+
+// JWTConfig contains JWT token settings
+type JWTConfig struct {
+	SecretKey    string `yaml:"secret_key"`
+	Issuer       string `yaml:"issuer"`
+	ExpiryHours  int    `yaml:"expiry_hours"`
 }
 
 // RateLimiting contains rate limiting settings
@@ -153,6 +161,11 @@ func NewDefaultGatewayConfig() *GatewayConfig {
 				Enabled:            true,
 				RequestsPerMinute: 100,
 			},
+			JWT: JWTConfig{
+				SecretKey:   "your-super-secret-jwt-key-change-this-in-production",
+				Issuer:      "lucas-gateway",
+				ExpiryHours: 24,
+			},
 		},
 	}
 }
@@ -198,6 +211,16 @@ func (c *GatewayConfig) setDefaults() error {
 
 	if c.Security.RateLimiting.RequestsPerMinute == 0 {
 		c.Security.RateLimiting.RequestsPerMinute = 100
+	}
+
+	if c.Security.JWT.SecretKey == "" {
+		c.Security.JWT.SecretKey = "your-super-secret-jwt-key-change-this-in-production"
+	}
+	if c.Security.JWT.Issuer == "" {
+		c.Security.JWT.Issuer = "lucas-gateway"
+	}
+	if c.Security.JWT.ExpiryHours == 0 {
+		c.Security.JWT.ExpiryHours = 24
 	}
 
 	return nil
@@ -252,6 +275,20 @@ func (c *GatewayConfig) validate() error {
 	// Validate rate limiting
 	if c.Security.RateLimiting.Enabled && c.Security.RateLimiting.RequestsPerMinute <= 0 {
 		return fmt.Errorf("requests_per_minute must be greater than 0 when rate limiting is enabled")
+	}
+
+	// Validate JWT config
+	if c.Security.JWT.SecretKey == "" {
+		return fmt.Errorf("JWT secret_key cannot be empty")
+	}
+	if len(c.Security.JWT.SecretKey) < 32 {
+		return fmt.Errorf("JWT secret_key must be at least 32 characters long for security")
+	}
+	if c.Security.JWT.Issuer == "" {
+		return fmt.Errorf("JWT issuer cannot be empty")
+	}
+	if c.Security.JWT.ExpiryHours <= 0 {
+		return fmt.Errorf("JWT expiry_hours must be greater than 0")
 	}
 
 	return nil

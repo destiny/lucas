@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { auth } from '$lib/auth';
+  import { auth } from '../lib/auth';
 
   let username = '';
   let email = '';
   let password = '';
   let error = '';
+  let success = '';
   let isLoading = false;
   let useEmail = false; // Toggle between username and email login
 
@@ -25,6 +26,7 @@
     }
 
     error = '';
+    success = '';
     isLoading = true;
 
     try {
@@ -36,6 +38,13 @@
 
       if (!result.success) {
         error = result.error || 'Login failed';
+      } else {
+        success = 'Login successful! You are now logged in and will be redirected to the dashboard.';
+        // Form will be hidden automatically as user is now authenticated
+        // Clear form fields
+        username = '';
+        email = '';
+        password = '';
       }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Login failed';
@@ -94,6 +103,10 @@
 
     {#if error}
       <div class="error">{error}</div>
+    {/if}
+
+    {#if success}
+      <div class="success">{success}</div>
     {/if}
 
     <button type="submit" disabled={isLoading}>
@@ -161,6 +174,16 @@
     border-radius: 4px;
     margin-bottom: 1rem;
     border-left: 4px solid #d32f2f;
+  }
+
+  .success {
+    color: #2e7d32;
+    background: #e8f5e8;
+    padding: 0.75rem;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+    border-left: 4px solid #4caf50;
+    text-align: center;
   }
 
   button[type="submit"] {

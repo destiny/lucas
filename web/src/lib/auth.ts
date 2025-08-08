@@ -19,7 +19,7 @@ export interface AuthState {
 function createAuthStore() {
   const { subscribe, set, update } = writable<AuthState>({
     user: null,
-    token: localStorage.getItem('auth_token'),
+    token: typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null,
     isAuthenticated: false,
     isLoading: false,
   });
@@ -31,6 +31,11 @@ function createAuthStore() {
     async init() {
       update(state => ({ ...state, isLoading: true }));
       
+      if (typeof window === 'undefined') {
+        update(state => ({ ...state, isLoading: false }));
+        return;
+      }
+
       const token = localStorage.getItem('auth_token');
       if (token) {
         try {
@@ -64,7 +69,9 @@ function createAuthStore() {
         const response = await apiClient.login(username, email, password);
         const { user, token } = response;
         
-        localStorage.setItem('auth_token', token);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('auth_token', token);
+        }
         set({
           user,
           token,
@@ -90,7 +97,9 @@ function createAuthStore() {
         const response = await apiClient.register(username, email, password);
         const { user, token } = response;
         
-        localStorage.setItem('auth_token', token);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('auth_token', token);
+        }
         set({
           user,
           token,
@@ -110,7 +119,9 @@ function createAuthStore() {
 
     // Logout user
     logout() {
-      localStorage.removeItem('auth_token');
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('auth_token');
+      }
       set({
         user: null,
         token: null,
@@ -140,7 +151,33 @@ class ApiClient {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
+      // Provide more specific error messages based on status codes
+      let errorMessage = errorData.message;
+      if (!errorMessage) {
+        switch (response.status) {
+          case 400:
+            errorMessage = 'Invalid request. Please check your input.';
+            break;
+          case 401:
+            errorMessage = 'Authentication required. Please log in.';
+            break;
+          case 403:
+            errorMessage = 'Access denied. You do not have permission to perform this action.';
+            break;
+          case 404:
+            errorMessage = 'Resource not found. Please check if the item exists.';
+            break;
+          case 409:
+            errorMessage = 'Conflict. The requested action cannot be completed due to a conflict.';
+            break;
+          case 500:
+            errorMessage = 'Server error. Please try again later.';
+            break;
+          default:
+            errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        }
+      }
+      throw new Error(errorMessage);
     }
 
     return response.json();
@@ -183,16 +220,23 @@ class ApiClient {
     return this.request('/gateway/status');
   }
 
-  async getUserDevices(userId: number, token: string) {
-    return this.authenticatedRequest(`/users/${userId}/devices`, token);
+  async getUserDevices(token: string) {
+    return this.authenticatedRequest(`/user/devices`, token);
   }
 
-  async getUserHubs(userId: number, token: string) {
-    return this.authenticatedRequest(`/users/${userId}/hubs`, token);
+  async getUserHubs(token: string) {
+    return this.authenticatedRequest(`/user/hubs`, token);
   }
 
-  async sendDeviceAction(userId: number, deviceId: string, action: any, token: string) {
-    return this.authenticatedRequest(`/users/${userId}/devices/${deviceId}/action`, token, {
+  async claimHub(productKey: string, token: string) {
+    return this.authenticatedRequest('/user/hubs/claim', token, {
+      method: 'POST',
+      body: JSON.stringify({ product_key: productKey }),
+    });
+  }
+
+  async sendDeviceAction(deviceId: string, action: any, token: string) {
+    return this.authenticatedRequest(`/user/devices/${deviceId}/action`, token, {
       method: 'POST',
       body: JSON.stringify(action),
     });

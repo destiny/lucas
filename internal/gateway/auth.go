@@ -27,12 +27,12 @@ type JWTClaims struct {
 }
 
 // NewJWTService creates a new JWT service
-func NewJWTService(secretKey string, issuer string) *JWTService {
+func NewJWTService(secretKey string, issuer string, expiryHours int) *JWTService {
 	return &JWTService{
 		secretKey:     []byte(secretKey),
 		issuer:        issuer,
-		tokenExpiry:   24 * time.Hour,     // Access tokens expire in 24 hours
-		refreshExpiry: 7 * 24 * time.Hour, // Refresh tokens expire in 7 days
+		tokenExpiry:   time.Duration(expiryHours) * time.Hour,
+		refreshExpiry: 7 * 24 * time.Hour, // Refresh tokens expire in 7 days (could be configurable later)
 	}
 }
 

@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { auth, apiClient, type User } from '$lib/auth';
+  import { auth, apiClient } from '../lib/auth';
 
-  export let user: User;
+  $: authState = $auth;
+  $: user = authState.user;
   
   let gatewayStatus: any = null;
   let devices: any[] = [];
@@ -22,8 +23,8 @@
       // Load gateway status and user data in parallel
       const [statusResponse, devicesResponse, hubsResponse] = await Promise.all([
         apiClient.getGatewayStatus(),
-        apiClient.getUserDevices(user.id, token),
-        apiClient.getUserHubs(user.id, token),
+        apiClient.getUserDevices(token),
+        apiClient.getUserHubs(token),
       ]);
 
       gatewayStatus = statusResponse;
@@ -36,15 +37,11 @@
     }
   }
 
-  function handleLogout() {
-    auth.logout();
-  }
-
   async function sendDeviceAction(deviceId: string, action: any) {
     if (!token) return;
     
     try {
-      await apiClient.sendDeviceAction(user.id, deviceId, action, token);
+      await apiClient.sendDeviceAction(deviceId, action, token);
       // Reload device data to reflect changes
       await loadData();
     } catch (err) {
@@ -58,13 +55,6 @@
 </script>
 
 <div class="dashboard">
-  <header class="dashboard-header">
-    <h1>Lucas Control Panel</h1>
-    <div class="user-info">
-      <span>Welcome, {user.username}!</span>
-      <button class="logout-btn" on:click={handleLogout}>Logout</button>
-    </div>
-  </header>
 
   {#if loading}
     <div class="loading">Loading dashboard...</div>
@@ -163,39 +153,6 @@
     padding: 1rem;
   }
 
-  .dashboard-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 2rem;
-    padding-bottom: 1rem;
-    border-bottom: 2px solid #e0e0e0;
-  }
-
-  .dashboard-header h1 {
-    color: #333;
-    margin: 0;
-  }
-
-  .user-info {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-  }
-
-  .logout-btn {
-    background: #f44336;
-    color: white;
-    border: none;
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: background-color 0.2s;
-  }
-
-  .logout-btn:hover {
-    background: #d32f2f;
-  }
 
   .loading, .error {
     text-align: center;

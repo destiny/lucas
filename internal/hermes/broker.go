@@ -325,14 +325,27 @@ func (b *Broker) handleWorkerReply(workerID, clientID string, reply []byte) erro
 	b.mutex.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("unknown worker: %s", workerID)
+		// Worker might have been cleaned up due to race condition
+		// Still forward the reply to the client, but log the issue
+		b.logger.Warn().
+			Str("worker_id", workerID).
+			Str("client_id", clientID).
+			Msg("Received reply from unknown worker - forwarding to client and requesting re-registration")
+		
+		// Send reply to client anyway (client is waiting for this)
+		if err := b.sendToClient(clientID, reply); err != nil {
+			return fmt.Errorf("failed to send reply from unknown worker to client: %w", err)
+		}
+		
+		// Request worker re-registration for future messages
+		return b.sendReregistrationRequest(workerID)
 	}
 
 	// Update worker stats
 	worker.mutex.Lock()
 	worker.Requests++
 	worker.LastPing = time.Now()
-	worker.Expiry = time.Now().Add(b.heartbeat * 3)
+	worker.Expiry = time.Now().Add(b.heartbeat * 10) // Increased from 3 to 10 for consistency
 	worker.mutex.Unlock()
 
 	// Send reply to client
@@ -346,7 +359,15 @@ func (b *Broker) handleWorkerHeartbeat(workerID string) error {
 	b.mutex.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("unknown worker: %s", workerID)
+		// Worker might have been cleaned up due to race condition
+		// Log this as a warning and request worker re-registration
+		b.logger.Warn().
+			Str("worker_id", workerID).
+			Msg("Received heartbeat from unknown worker - requesting re-registration")
+		
+		// Send a re-registration request back to the worker
+		// The worker should respond with a READY message
+		return b.sendReregistrationRequest(workerID)
 	}
 
 	worker.mutex.Lock()
@@ -402,6 +423,38 @@ func (b *Broker) sendHeartbeatResponse(workerID string) error {
 		Str("worker_id", workerID).
 		Int("total_sent", b.stats.HeartbeatsSent).
 		Msg("Heartbeat response sent to worker")
+
+	return nil
+}
+
+// sendReregistrationRequest sends a re-registration request to a worker
+func (b *Broker) sendReregistrationRequest(workerID string) error {
+	if b.socket == nil {
+		// In test scenarios, socket may be nil - just skip sending
+		b.logger.Debug().Msg("Socket not available - skipping re-registration request")
+		return nil
+	}
+
+	// Send a special disconnect message to trigger worker re-registration
+	// The worker will interpret this as a signal to re-send its READY message
+	reregMsg := &WorkerMessage{
+		Protocol: HERMES_WORKER,
+		Command:  HERMES_DISCONNECT,
+	}
+
+	msgBytes, err := SerializeMessage(reregMsg)
+	if err != nil {
+		return fmt.Errorf("failed to serialize re-registration request: %w", err)
+	}
+
+	_, err = b.socket.SendMessage(workerID, "", msgBytes)
+	if err != nil {
+		return fmt.Errorf("failed to send re-registration request to worker: %w", err)
+	}
+
+	b.logger.Debug().
+		Str("worker_id", workerID).
+		Msg("Re-registration request sent to worker")
 
 	return nil
 }
@@ -576,10 +629,14 @@ func (b *Broker) checkWorkerLiveness() {
 	now := time.Now()
 	expiredWorkers := make([]string, 0)
 
+	// Add grace period to prevent race conditions with late-arriving heartbeats
+	gracePeriod := time.Duration(30 * time.Second) // 30 seconds grace period
+
 	b.mutex.RLock()
 	for workerID, worker := range b.workers {
 		worker.mutex.RLock()
-		if now.After(worker.Expiry) {
+		// Worker is considered expired only if it's past the expiry time + grace period
+		if now.After(worker.Expiry.Add(gracePeriod)) {
 			expiredWorkers = append(expiredWorkers, workerID)
 		}
 		worker.mutex.RUnlock()

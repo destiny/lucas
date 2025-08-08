@@ -37,6 +37,7 @@ type HubResponse struct {
 // Daemon represents the hub daemon
 type Daemon struct {
 	config        *Config
+	configPath    string
 	deviceManager *DeviceManager
 	workerService *WorkerService
 	logger        zerolog.Logger
@@ -60,12 +61,13 @@ func NewDaemon(configPath string, debug, testMode bool) (*Daemon, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	daemon := &Daemon{
-		config:   config,
-		logger:   logger.New(),
-		ctx:      ctx,
-		cancel:   cancel,
-		debug:    debug,
-		testMode: testMode,
+		config:     config,
+		configPath: configPath,
+		logger:     logger.New(),
+		ctx:        ctx,
+		cancel:     cancel,
+		debug:      debug,
+		testMode:   testMode,
 	}
 
 	// Initialize device manager
@@ -75,6 +77,66 @@ func NewDaemon(configPath string, debug, testMode bool) (*Daemon, error) {
 	daemon.workerService = NewWorkerService(config, daemon.deviceManager)
 
 	return daemon, nil
+}
+
+// needsRegistration checks if the hub needs to register with gateway
+// by detecting if gateway public key is still a placeholder
+func (d *Daemon) needsRegistration() bool {
+	return d.config.Gateway.PublicKey == "" || 
+		   d.config.Gateway.PublicKey == "gateway_public_key_here"
+}
+
+// autoRegister performs automatic registration with gateway using default locations
+func (d *Daemon) autoRegister() error {
+	d.logger.Info().Msg("Gateway not registered, performing auto-registration...")
+
+	// Try common gateway URLs
+	gatewayURLs := []string{
+		"http://localhost:8080",
+		"http://127.0.0.1:8080", 
+		"http://gateway:8080",
+		"http://gateway.local:8080",
+	}
+
+	discovery := NewGatewayDiscovery()
+	var lastErr error
+
+	for _, gatewayURL := range gatewayURLs {
+		d.logger.Debug().
+			Str("gateway_url", gatewayURL).
+			Msg("Attempting auto-registration with gateway")
+
+		// Try to get gateway info first to verify it's reachable
+		gatewayInfo, err := discovery.GetGatewayInfo(gatewayURL)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		// Perform registration
+		err = discovery.RegisterWithGateway(
+			gatewayURL,
+			d.config.Hub.ID,
+			d.config.Hub.PublicKey,
+			d.config.Hub.ProductKey,
+		)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		// Update config with gateway information
+		d.config.UpdateGatewayInfo(gatewayInfo.ZMQEndpoint, gatewayInfo.PublicKey)
+
+		d.logger.Info().
+			Str("gateway_url", gatewayURL).
+			Str("gateway_endpoint", gatewayInfo.ZMQEndpoint).
+			Msg("Auto-registration successful")
+
+		return nil
+	}
+
+	return fmt.Errorf("failed to auto-register with any gateway: %w", lastErr)
 }
 
 // Start starts the hub daemon
@@ -95,6 +157,25 @@ func (d *Daemon) Start() error {
 	// Initialize devices
 	if err := d.deviceManager.Initialize(d.debug, d.testMode); err != nil {
 		return fmt.Errorf("failed to initialize devices: %w", err)
+	}
+
+	// Check if auto-registration is needed
+	if d.needsRegistration() {
+		if err := d.autoRegister(); err != nil {
+			d.logger.Warn().
+				Err(err).
+				Msg("Auto-registration failed, continuing in offline mode")
+			// Continue anyway - hub can still work offline
+		} else {
+			// Auto-registration succeeded, save updated config to file
+			if err := SaveConfig(d.config, d.configPath); err != nil {
+				d.logger.Warn().
+					Err(err).
+					Msg("Failed to save updated config after auto-registration")
+			} else {
+				d.logger.Info().Msg("Configuration updated with gateway information")
+			}
+		}
 	}
 
 	// Start worker service to connect to gateway via Hermes

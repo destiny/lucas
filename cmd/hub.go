@@ -268,12 +268,8 @@ var hubKeysGenerateCmd = &cobra.Command{
 			cmd.Printf("Registering new keys with gateway...\n")
 			discovery := hub.NewGatewayDiscovery()
 			
-			// Generate hub ID for registration
-			hubID, err := hub.GenerateHubID()
-			if err != nil {
-				cmd.Printf("⚠ Failed to generate hub ID: %v\n", err)
-				return nil
-			}
+			// Use hub ID from configuration
+			hubID := config.Hub.ID
 			
 			err = discovery.RegisterWithGateway(hubGatewayURL, hubID, hubKeys.PublicKey, config.Hub.ProductKey)
 			if err != nil {
@@ -335,12 +331,6 @@ This is automatically done during 'hub init' if a gateway is found.`,
 func initializeHub(cmd *cobra.Command) error {
 	cmd.Printf("Initializing Lucas Hub...\n")
 
-	// Generate hub ID
-	hubID, err := hub.GenerateHubID()
-	if err != nil {
-		return fmt.Errorf("failed to generate hub ID: %w", err)
-	}
-
 	// Check if configuration already exists
 	configExists := false
 	var existingConfig *hub.Config
@@ -360,6 +350,7 @@ func initializeHub(cmd *cobra.Command) error {
 
 	var config *hub.Config
 	var gatewayInfo *hub.GatewayInfo
+	var err error
 
 	if !configExists {
 		// Try to discover gateway
@@ -415,7 +406,7 @@ func initializeHub(cmd *cobra.Command) error {
 		cmd.Printf("Registering with gateway...\n")
 		
 		discovery := hub.NewGatewayDiscovery()
-		err = discovery.RegisterWithGateway(gatewayInfo.APIEndpoint, hubID, config.Hub.PublicKey, config.Hub.ProductKey)
+		err = discovery.RegisterWithGateway(gatewayInfo.APIEndpoint, config.Hub.ID, config.Hub.PublicKey, config.Hub.ProductKey)
 		if err != nil {
 			cmd.Printf("⚠ Gateway registration failed: %v\n", err)
 		} else {
@@ -426,7 +417,7 @@ func initializeHub(cmd *cobra.Command) error {
 	// Display summary
 	cmd.Printf("\n✅ Hub initialization complete!\n")
 	cmd.Printf("Configuration: %s\n", hubConfigPath)
-	cmd.Printf("Hub ID: %s\n", hubID)
+	cmd.Printf("Hub ID: %s\n", config.Hub.ID)
 	
 	if config.HasValidHubKeys() {
 		cmd.Printf("Hub Public Key: %s\n", config.Hub.PublicKey)
@@ -477,11 +468,8 @@ func registerWithGateway(cmd *cobra.Command) error {
 
 	cmd.Printf("Registering with gateway at %s...\n", gatewayURL)
 
-	// Generate hub ID
-	hubID, err := hub.GenerateHubID()
-	if err != nil {
-		return fmt.Errorf("failed to generate hub ID: %w", err)
-	}
+	// Use hub ID from configuration
+	hubID := config.Hub.ID
 
 	// Register with gateway
 	discovery := hub.NewGatewayDiscovery()
@@ -607,13 +595,8 @@ func promptGatewayURL() string {
 func performInteractiveRegistration(config *hub.Config, gatewayURL string) {
 	fmt.Printf("🔍 Discovering gateway at %s...\n", gatewayURL)
 	
-	// Generate hub ID for registration
-	hubID, err := hub.GenerateHubID()
-	if err != nil {
-		fmt.Printf("⚠ Failed to generate hub ID: %v\n", err)
-		fmt.Println("💡 You can register manually later with: lucas hub register --gateway-url " + gatewayURL)
-		return
-	}
+	// Use hub ID from configuration file (don't generate a new one)
+	hubID := config.Hub.ID
 	
 	// Discovery and registration
 	discovery := hub.NewGatewayDiscovery()

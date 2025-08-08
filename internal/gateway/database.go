@@ -117,6 +117,7 @@ func (d *Database) initSchema() error {
 		`CREATE INDEX IF NOT EXISTS idx_devices_hub_id ON devices(hub_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key)`,
 		`CREATE INDEX IF NOT EXISTS idx_hubs_hub_id ON hubs(hub_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_hubs_product_key ON hubs(product_key)`,
 	}
 
 	for _, query := range queries {
@@ -128,6 +129,11 @@ func (d *Database) initSchema() error {
 	// Handle migration for existing databases - add password_hash if it doesn't exist
 	if err := d.migratePasswordHash(); err != nil {
 		return fmt.Errorf("failed to migrate password hash: %w", err)
+	}
+
+	// Handle migration for product_key unique constraint
+	if err := d.migrateProductKeyConstraint(); err != nil {
+		return fmt.Errorf("failed to migrate product key constraint: %w", err)
 	}
 
 	return nil
@@ -163,6 +169,46 @@ func (d *Database) migratePasswordHash() error {
 		return err
 	}
 
+	return nil
+}
+
+// migrateProductKeyConstraint ensures product_key has unique constraint
+func (d *Database) migrateProductKeyConstraint() error {
+	// Check if we need to add unique constraint to product_key
+	// SQLite doesn't support adding unique constraints to existing columns directly
+	// So we need to check if constraint already exists by attempting to insert duplicate
+	
+	// First, check if there are any duplicate product keys in existing data
+	duplicateQuery := `SELECT product_key, COUNT(*) as count FROM hubs 
+					 WHERE product_key IS NOT NULL AND product_key != '' 
+					 GROUP BY product_key HAVING COUNT(*) > 1`
+	
+	rows, err := d.db.Query(duplicateQuery)
+	if err != nil {
+		return fmt.Errorf("failed to check duplicate product keys: %w", err)
+	}
+	defer rows.Close()
+	
+	// If duplicates exist, we need to handle them
+	var duplicates []string
+	for rows.Next() {
+		var productKey string
+		var count int
+		if err := rows.Scan(&productKey, &count); err != nil {
+			return err
+		}
+		duplicates = append(duplicates, productKey)
+	}
+	
+	// For now, just log duplicates - in production you might want to handle them differently
+	if len(duplicates) > 0 {
+		// Log warning about duplicates but don't fail the migration
+		// In a production system, you might want to update duplicate product keys
+		fmt.Printf("Warning: Found %d duplicate product keys that will need manual resolution\n", len(duplicates))
+	}
+	
+	// The unique constraint will be enforced at the application level for now
+	// since SQLite doesn't allow adding constraints to existing columns easily
 	return nil
 }
 
@@ -338,18 +384,32 @@ func (d *Database) GetHubByHubID(hubID string) (*Hub, error) {
 
 // RegisterHub registers a new hub without requiring a user (for initial registration)
 func (d *Database) RegisterHub(hubID, publicKey, name, productKey string) (*Hub, error) {
+	// Validate product key is provided and not empty
+	if productKey == "" {
+		return nil, fmt.Errorf("product key is required for hub registration")
+	}
+
 	// Check if hub already exists
 	_, err := d.GetHubByHubID(hubID)
 	if err == nil {
-		// Hub exists, update the public key and name
-		query := `UPDATE hubs SET public_key = ?, name = ?, status = 'offline', last_seen = CURRENT_TIMESTAMP 
+		// Hub exists, update all registration fields (handles race condition with EnsureHubExists)
+		query := `UPDATE hubs SET public_key = ?, name = ?, product_key = ?, status = 'offline', last_seen = CURRENT_TIMESTAMP 
 				  WHERE hub_id = ?`
-		_, err := d.db.Exec(query, publicKey, name, hubID)
+		_, err := d.db.Exec(query, publicKey, name, productKey, hubID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update existing hub: %w", err)
 		}
 		// Return updated hub
 		return d.GetHubByHubID(hubID)
+	}
+
+	// Check if product key is already in use by another hub
+	existingByProductKey, err := d.GetHubByProductKey(productKey)
+	if err == nil {
+		// Product key exists but for different hub - this is an error
+		if existingByProductKey.HubID != hubID {
+			return nil, fmt.Errorf("product key '%s' is already registered to hub '%s'", productKey, existingByProductKey.HubID)
+		}
 	}
 
 	// Hub doesn't exist, create new one with NULL user_id
@@ -358,6 +418,10 @@ func (d *Database) RegisterHub(hubID, publicKey, name, productKey string) (*Hub,
 	
 	result, err := d.db.Exec(query, hubID, name, publicKey, productKey)
 	if err != nil {
+		// Check if this is a product key constraint violation
+		if strings.Contains(err.Error(), "product_key") || strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return nil, fmt.Errorf("product key '%s' is already registered to another hub", productKey)
+		}
 		return nil, fmt.Errorf("failed to register hub: %w", err)
 	}
 	
@@ -434,7 +498,71 @@ func (d *Database) GetUserHubs(userID int) ([]*Hub, error) {
 	return hubs, nil
 }
 
+func (d *Database) GetAllHubs() ([]*Hub, error) {
+	query := `SELECT id, user_id, hub_id, name, public_key, product_key, endpoint, status, auto_registered, last_seen, created_at 
+			  FROM hubs ORDER BY created_at DESC`
+	
+	rows, err := d.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all hubs: %w", err)
+	}
+	defer rows.Close()
+
+	var hubs []*Hub
+	for rows.Next() {
+		var hub Hub
+		var productKey sql.NullString
+		err := rows.Scan(
+			&hub.ID, &hub.UserID, &hub.HubID, &hub.Name, &hub.PublicKey,
+			&productKey, &hub.Endpoint, &hub.Status, &hub.AutoRegistered, &hub.LastSeen, &hub.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan hub: %w", err)
+		}
+		hub.ProductKey = productKey.String
+		hubs = append(hubs, &hub)
+	}
+	return hubs, nil
+}
+
+// EnsureHubExists uses select-insert-select pattern to ensure hub record exists
+// This handles race conditions between hub registration and ZMQ status updates
+func (d *Database) EnsureHubExists(hubID string) error {
+	// 1. SELECT - check if hub exists
+	_, err := d.GetHubByHubID(hubID)
+	if err == nil {
+		return nil // hub already exists
+	}
+	
+	// 2. INSERT - try to create minimal hub record with auto-registration
+	query := `INSERT INTO hubs (user_id, hub_id, name, public_key, product_key, endpoint, status, auto_registered, last_seen) 
+			  VALUES (NULL, ?, ?, '', '', '', 'offline', TRUE, CURRENT_TIMESTAMP)`
+	_, err = d.db.Exec(query, hubID, hubID)
+	if err != nil {
+		// Check if this is a duplicate key constraint (race condition)
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "hub_id") {
+			// Another process inserted it, this is expected in race conditions
+		} else {
+			return fmt.Errorf("failed to auto-register hub: %w", err)
+		}
+	}
+	
+	// 3. SELECT - verify hub now exists
+	_, err = d.GetHubByHubID(hubID)
+	if err != nil {
+		return fmt.Errorf("hub still not found after auto-registration attempt: %w", err)
+	}
+	
+	return nil
+}
+
 func (d *Database) UpdateHubStatus(hubID, status string) error {
+	// Ensure hub exists first using select-insert-select pattern
+	if err := d.EnsureHubExists(hubID); err != nil {
+		return fmt.Errorf("could not ensure hub exists: %w", err)
+	}
+	
+	// Now safely update status
 	query := `UPDATE hubs SET status = ?, last_seen = CURRENT_TIMESTAMP WHERE hub_id = ?`
 	result, err := d.db.Exec(query, status, hubID)
 	if err != nil {
