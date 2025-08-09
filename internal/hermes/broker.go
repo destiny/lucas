@@ -57,6 +57,7 @@ type Broker struct {
 	logger      zerolog.Logger
 	stats       *BrokerStats
 	mutex       sync.RWMutex
+	brokerService interface{} // Reference to gateway broker service for immediate device requests
 }
 
 // NewBroker creates a new Hermes broker
@@ -76,6 +77,13 @@ func NewBroker(address string) *Broker {
 			StartTime: time.Now(),
 		},
 	}
+}
+
+// SetBrokerService sets reference to gateway broker service for immediate device requests
+func (b *Broker) SetBrokerService(brokerService interface{}) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	b.brokerService = brokerService
 }
 
 // Start starts the broker
@@ -315,6 +323,11 @@ func (b *Broker) handleWorkerReady(workerID, serviceName string) error {
 	// Process any pending requests for this service
 	b.processPendingRequests(serviceName)
 
+	// For hub.control service, immediately request device list as part of handshake
+	if serviceName == "hub.control" {
+		b.sendImmediateDeviceListRequest(workerID)
+	}
+
 	return nil
 }
 
@@ -348,7 +361,25 @@ func (b *Broker) handleWorkerReply(workerID, clientID string, reply []byte) erro
 	worker.Expiry = time.Now().Add(b.heartbeat * 10) // Increased from 3 to 10 for consistency
 	worker.mutex.Unlock()
 
-	// Send reply to client
+	// Check if this is an immediate device list response from hub.control service
+	if clientID == "gateway_immediate" && worker.Service == "hub.control" {
+		b.logger.Info().
+			Str("hub_id", workerID).
+			Int("response_size", len(reply)).
+			Msg("Received immediate device list response from hub")
+		
+		// Process device list response via broker service
+		if b.brokerService != nil {
+			if bs, ok := b.brokerService.(interface {
+				ProcessDeviceListResponse(hubID string, response []byte)
+			}); ok {
+				bs.ProcessDeviceListResponse(workerID, reply)
+			}
+		}
+		return nil
+	}
+
+	// Send reply to client for regular requests
 	return b.sendToClient(clientID, reply)
 }
 
@@ -767,4 +798,41 @@ func min(a, b int) int {
 // GetAddress returns the broker's bind address
 func (b *Broker) GetAddress() string {
 	return b.address
+}
+
+// sendImmediateDeviceListRequest sends device list request immediately as part of handshake
+func (b *Broker) sendImmediateDeviceListRequest(hubID string) {
+	b.logger.Info().
+		Str("hub_id", hubID).
+		Msg("Sending immediate device list request as part of handshake")
+
+	// Create device list request
+	serviceReq := ServiceRequest{
+		MessageID: GenerateMessageID(),
+		Service:   "hub.control", 
+		Action:    "list",
+		Payload:   json.RawMessage(`{}`),
+	}
+
+	requestBytes, err := json.Marshal(serviceReq)
+	if err != nil {
+		b.logger.Error().
+			Str("hub_id", hubID).
+			Err(err).
+			Msg("Failed to marshal device list request")
+		return
+	}
+
+	// Send request directly to the hub worker via broker socket
+	if err := b.sendToWorker(hubID, "gateway_immediate", requestBytes); err != nil {
+		b.logger.Error().
+			Str("hub_id", hubID).
+			Err(err).
+			Msg("Failed to send immediate device list request")
+		return
+	}
+
+	b.logger.Info().
+		Str("hub_id", hubID).
+		Msg("Immediate device list request sent successfully")
 }

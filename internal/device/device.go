@@ -16,9 +16,12 @@ type Device interface {
 
 // DeviceInfo contains basic information about a device
 type DeviceInfo struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
 	Type         string   `json:"type"`
 	Model        string   `json:"model"`
 	Address      string   `json:"address"`
+	Status       string   `json:"status"`
 	Capabilities []string `json:"capabilities"`
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -107,6 +108,10 @@ func NewServiceRegistry() *ServiceRegistry {
 func (bs *BrokerService) Start() error {
 	bs.logger.Info().Msg("Starting Gateway Broker Service")
 
+
+	// Set broker service reference for immediate device list processing
+	bs.broker.SetBrokerService(bs)
+
 	// Start Hermes broker
 	if err := bs.broker.Start(); err != nil {
 		return fmt.Errorf("failed to start Hermes broker: %w", err)
@@ -114,7 +119,7 @@ func (bs *BrokerService) Start() error {
 
 	// Hub services will announce themselves when they connect
 
-	// Start service monitoring
+	// Start service monitoring (simplified)
 	go bs.monitorServices()
 
 	bs.logger.Info().Msg("Gateway Broker Service started successfully")
@@ -184,7 +189,7 @@ func (bs *BrokerService) UnregisterHub(hubID string) error {
 	// Remove hub's services from registry
 	bs.registry.RemoveHubServices(hubID)
 
-	// Update database status
+	// Update hub status to offline
 	if err := bs.database.UpdateHubStatus(hubID, "offline"); err != nil {
 		bs.logger.Warn().
 			Str("hub_id", hubID).
@@ -192,9 +197,17 @@ func (bs *BrokerService) UnregisterHub(hubID string) error {
 			Msg("Failed to update hub status in database")
 	}
 
+	// Update all devices belonging to this hub to offline status
+	if err := bs.updateHubDevicesStatus(hubID, "offline"); err != nil {
+		bs.logger.Warn().
+			Str("hub_id", hubID).
+			Err(err).
+			Msg("Failed to update hub devices status to offline")
+	}
+
 	bs.logger.Info().
 		Str("hub_id", hubID).
-		Msg("Hub unregistered from broker service")
+		Msg("Hub and its devices marked as offline")
 
 	return nil
 }
@@ -337,7 +350,7 @@ func (bs *BrokerService) GetServiceStats() map[string]interface{} {
 	}
 }
 
-// monitorServices monitors service health and cleanup
+// monitorServices monitors service health and cleanup (simplified)
 func (bs *BrokerService) monitorServices() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -348,7 +361,6 @@ func (bs *BrokerService) monitorServices() {
 		select {
 		case <-ticker.C:
 			bs.checkServiceHealth()
-			bs.syncWorkerRegistrations()
 			bs.cleanupStaleServices()
 		case <-bs.ctx.Done():
 			bs.logger.Info().Msg("Service monitoring stopping")
@@ -396,51 +408,31 @@ func (bs *BrokerService) checkServiceHealth() {
 	}
 }
 
-// syncWorkerRegistrations tracks available services for routing
-func (bs *BrokerService) syncWorkerRegistrations() {
-	services := bs.broker.GetServices()
-	workers := bs.broker.GetWorkers()
-
-	// Track which hubs are currently available
-	availableHubs := make(map[string]bool)
-
-	// Update service availability for hub.control services
-	if serviceInfo, exists := services["hub.control"]; exists {
-		for _, workerID := range serviceInfo.Workers {
-			if worker, workerExists := workers[workerID]; workerExists {
-				// Check if worker is active (recent heartbeat)
-				if time.Since(worker.LastPing) < 90*time.Second {
-					availableHubs[workerID] = true
-					
-					// Check if this is a newly available hub
-					bs.mutex.RLock()
-					_, wasKnown := bs.hubHandlers[workerID]
-					bs.mutex.RUnlock()
-					
-					if !wasKnown {
-						// New hub detected - process service announcement
-						bs.handleServiceAnnouncement(workerID)
-					}
-				}
-			}
-		}
-	}
-
-	// Log available hubs for routing
-	if len(availableHubs) > 0 {
-		bs.logger.Debug().
-			Int("available_hubs", len(availableHubs)).
-			Msg("Hub services available for routing")
-	}
-}
-
-// handleServiceAnnouncement processes service ready announcements from hubs
-func (bs *BrokerService) handleServiceAnnouncement(hubID string) {
+// processHubWorkerRegistration handles hub worker registration and immediate device list request
+func (bs *BrokerService) processHubWorkerRegistration(hubID, serviceName string) {
 	bs.logger.Info().
 		Str("hub_id", hubID).
-		Msg("Hub service announced - available for routing")
+		Str("service", serviceName).
+		Msg("Processing hub worker registration")
 
-	// Create a simple hub handler for routing (no database dependency)
+	// Ensure hub exists in database first
+	if err := bs.database.EnsureHubExists(hubID); err != nil {
+		bs.logger.Error().
+			Str("hub_id", hubID).
+			Err(err).
+			Msg("Failed to ensure hub exists - skipping device registration")
+		return
+	}
+
+	// Update hub status to online
+	if err := bs.database.UpdateHubStatus(hubID, "online"); err != nil {
+		bs.logger.Warn().
+			Str("hub_id", hubID).
+			Err(err).
+			Msg("Failed to update hub status to online")
+	}
+
+	// Create hub handler for tracking
 	handler := &HubServiceHandler{
 		hubID:    hubID,
 		database: bs.database,
@@ -452,17 +444,227 @@ func (bs *BrokerService) handleServiceAnnouncement(hubID string) {
 	bs.hubHandlers[hubID] = handler
 	bs.mutex.Unlock()
 
-	// Update hub status in database (now uses select-insert-select pattern for race condition tolerance)
-	if err := bs.database.UpdateHubStatus(hubID, "online"); err != nil {
-		bs.logger.Warn().
+	bs.logger.Info().
+		Str("hub_id", hubID).
+		Msg("Hub registered successfully - device list will be requested via broker")
+}
+
+
+// getClientAddress converts broker bind address to client connection address
+func (bs *BrokerService) getClientAddress() string {
+	brokerAddr := bs.broker.GetAddress()
+	
+	// Convert bind addresses to client connection addresses
+	if strings.Contains(brokerAddr, "tcp://*:") {
+		// Replace * with localhost
+		return strings.Replace(brokerAddr, "*", "localhost", 1)
+	}
+	if strings.Contains(brokerAddr, "tcp://0.0.0.0:") {
+		// Replace 0.0.0.0 with localhost
+		return strings.Replace(brokerAddr, "0.0.0.0", "localhost", 1)
+	}
+	
+	// Return as-is for other addresses
+	return brokerAddr
+}
+
+// ProcessDeviceListResponse processes the device list response and registers devices
+func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte) {
+	bs.logger.Info().
+		Str("hub_id", hubID).
+		Msg("Processing immediate device list response from hub")
+
+	// Ensure hub is registered in gateway database
+	bs.processHubWorkerRegistration(hubID, "hub.control")
+		
+	// Parse service response
+	var serviceResp hermes.ServiceResponse
+	if err := json.Unmarshal(response, &serviceResp); err != nil {
+		bs.logger.Error().
 			Str("hub_id", hubID).
 			Err(err).
-			Msg("Failed to update hub status in database")
-	} else {
-		bs.logger.Debug().
-			Str("hub_id", hubID).
-			Msg("Hub status updated to online")
+			Msg("Failed to parse device list response")
+		return
 	}
+
+	bs.logger.Info().
+		Str("hub_id", hubID).
+		Bool("success", serviceResp.Success).
+		Str("message_id", serviceResp.MessageID).
+		Interface("data", serviceResp.Data).
+		Msg("[DEBUG] Gateway parsed service response")
+
+	if !serviceResp.Success {
+		bs.logger.Error().
+			Str("hub_id", hubID).
+			Str("error", serviceResp.Error).
+			Msg("Hub returned error for device list request")
+		return
+	}
+
+	// Get hub record from database
+	hub, err := bs.database.GetHubByHubID(hubID)
+	if err != nil {
+		bs.logger.Error().
+			Str("hub_id", hubID).
+			Err(err).
+			Msg("Failed to get hub record for device registration")
+		return
+	}
+
+	// Parse device list data
+	dataMap, ok := serviceResp.Data.(map[string]interface{})
+	if !ok {
+		bs.logger.Error().
+			Str("hub_id", hubID).
+			Str("data_type", fmt.Sprintf("%T", serviceResp.Data)).
+			Msg("Invalid device list data format")
+		return
+	}
+
+	bs.logger.Debug().
+		Str("hub_id", hubID).
+		Interface("data_map", dataMap).
+		Msg("[DEBUG] Gateway extracted data map")
+
+	devicesData, ok := dataMap["devices"]
+	if !ok {
+		bs.logger.Error().
+			Str("hub_id", hubID).
+			Interface("available_keys", getKeys(dataMap)).
+			Msg("No devices field in response")
+		return
+	}
+
+	bs.logger.Debug().
+		Str("hub_id", hubID).
+		Str("devices_type", fmt.Sprintf("%T", devicesData)).
+		Msg("[DEBUG] Gateway found devices field")
+
+	devicesSlice, ok := devicesData.([]interface{})
+	if !ok {
+		bs.logger.Error().
+			Str("hub_id", hubID).
+			Str("devices_type", fmt.Sprintf("%T", devicesData)).
+			Msg("Devices field is not an array")
+		return
+	}
+
+	bs.logger.Info().
+		Str("hub_id", hubID).
+		Int("devices_count", len(devicesSlice)).
+		Msg("[DEBUG] Gateway found devices array")
+
+	// Register each device
+	deviceCount := 0
+	for _, deviceData := range devicesSlice {
+		deviceMap, ok := deviceData.(map[string]interface{})
+		if !ok {
+			bs.logger.Warn().
+				Str("hub_id", hubID).
+				Msg("Skipping invalid device data")
+			continue
+		}
+
+		// Extract device information
+		deviceID, _ := deviceMap["id"].(string)
+		deviceType, _ := deviceMap["type"].(string)
+		deviceName, _ := deviceMap["name"].(string)
+		deviceModel, _ := deviceMap["model"].(string)
+		deviceAddress, _ := deviceMap["address"].(string)
+		deviceStatus, _ := deviceMap["status"].(string)
+
+		if deviceID == "" || deviceType == "" {
+			bs.logger.Warn().
+				Str("hub_id", hubID).
+				Msg("Skipping device with missing ID or type")
+			continue
+		}
+
+		// Parse capabilities
+		var capabilities []string
+		if capData, exists := deviceMap["capabilities"]; exists {
+			if capSlice, ok := capData.([]interface{}); ok {
+				for _, cap := range capSlice {
+					if capStr, ok := cap.(string); ok {
+						capabilities = append(capabilities, capStr)
+					}
+				}
+			}
+		}
+
+		bs.logger.Info().
+			Str("hub_id", hubID).
+			Str("device_id", deviceID).
+			Str("device_type", deviceType).
+			Str("device_name", deviceName).
+			Str("device_model", deviceModel).
+			Str("device_address", deviceAddress).
+			Interface("capabilities", capabilities).
+			Int("hub_db_id", hub.ID).
+			Msg("[DEBUG] Gateway creating device in database")
+
+		// Create device in database
+		device, err := bs.database.CreateDevice(
+			hub.ID,          // hub database ID
+			deviceID,        // device ID from hub
+			deviceType,      // device type
+			deviceName,      // device name
+			deviceModel,     // device model
+			deviceAddress,   // device address
+			capabilities,    // device capabilities
+		)
+		if err != nil {
+			bs.logger.Error().
+				Str("hub_id", hubID).
+				Str("device_id", deviceID).
+				Err(err).
+				Msg("Failed to create device in database")
+			continue
+		}
+
+		bs.logger.Info().
+			Str("hub_id", hubID).
+			Str("device_id", deviceID).
+			Int("device_db_id", device.ID).
+			Msg("[DEBUG] Gateway successfully created device in database")
+
+		// Update device status - default to online since hub is connected
+		finalStatus := "online"
+		if deviceStatus != "" && deviceStatus != "unknown" {
+			finalStatus = deviceStatus
+		}
+		
+		if err := bs.database.UpdateDeviceStatus(deviceID, finalStatus); err != nil {
+			bs.logger.Warn().
+				Str("hub_id", hubID).
+				Str("device_id", deviceID).
+				Str("status", finalStatus).
+				Err(err).
+				Msg("Failed to update device status")
+		} else {
+			bs.logger.Debug().
+				Str("hub_id", hubID).
+				Str("device_id", deviceID).
+				Str("status", finalStatus).
+				Msg("Device status updated")
+		}
+
+		bs.logger.Info().
+			Str("hub_id", hubID).
+			Str("device_id", deviceID).
+			Str("device_type", deviceType).
+			Int("device_db_id", device.ID).
+			Msg("Device registered successfully")
+
+		deviceCount++
+	}
+
+	bs.logger.Info().
+		Str("hub_id", hubID).
+		Int("devices_registered", deviceCount).
+		Int("devices_total", len(devicesSlice)).
+		Msg("Device registration completed")
 }
 
 // cleanupStaleServices removes services that haven't been seen recently
@@ -602,4 +804,62 @@ func (sr *ServiceRegistry) GetStats() map[string]interface{} {
 		"total_devices":     totalDevices,
 		"services_by_type":  servicesByType,
 	}
+}
+
+// getKeys returns the keys of a map as a slice for debugging
+func getKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// updateHubDevicesStatus updates the status of all devices belonging to a hub
+func (bs *BrokerService) updateHubDevicesStatus(hubID string, status string) error {
+	bs.logger.Debug().
+		Str("hub_id", hubID).
+		Str("status", status).
+		Msg("Updating all devices status for hub")
+
+	// Get hub record from database
+	hub, err := bs.database.GetHubByHubID(hubID)
+	if err != nil {
+		return fmt.Errorf("failed to get hub record: %w", err)
+	}
+
+	// Get all devices for this hub
+	devices, err := bs.database.GetHubDevices(hub.ID)
+	if err != nil {
+		return fmt.Errorf("failed to get devices for hub: %w", err)
+	}
+
+	// Update status for each device
+	updatedCount := 0
+	for _, device := range devices {
+		if err := bs.database.UpdateDeviceStatus(device.DeviceID, status); err != nil {
+			bs.logger.Warn().
+				Str("hub_id", hubID).
+				Str("device_id", device.DeviceID).
+				Str("status", status).
+				Err(err).
+				Msg("Failed to update device status")
+		} else {
+			updatedCount++
+			bs.logger.Debug().
+				Str("hub_id", hubID).
+				Str("device_id", device.DeviceID).
+				Str("status", status).
+				Msg("Device status updated")
+		}
+	}
+
+	bs.logger.Info().
+		Str("hub_id", hubID).
+		Str("status", status).
+		Int("devices_updated", updatedCount).
+		Int("devices_total", len(devices)).
+		Msg("Hub devices status update completed")
+
+	return nil
 }

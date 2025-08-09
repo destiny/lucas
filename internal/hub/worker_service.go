@@ -120,6 +120,7 @@ func (ws *WorkerService) Start() error {
 		Int("registered_services", len(ws.workers)).
 		Msg("Hub Worker Service started successfully")
 
+
 	return nil
 }
 
@@ -302,7 +303,6 @@ func (ws *WorkerService) updateWorkerStats() {
 		}
 	}
 }
-
 
 // DeviceServiceHandler methods
 
@@ -728,10 +728,21 @@ func (hsh *HubServiceHandler) handleExecuteAction(req *hermes.ServiceRequest) (*
 
 // handleListAction handles device listing requests
 func (hsh *HubServiceHandler) handleListAction(req *hermes.ServiceRequest) (*hermes.ServiceResponse, error) {
+	hsh.logger.Info().
+		Str("hub_id", hsh.config.Hub.ID).
+		Str("message_id", req.MessageID).
+		Msg("[DEBUG] Hub received device list request")
+	
 	// Get all devices managed by this hub
 	devices := make([]interface{}, 0)
 	
 	for _, deviceConfig := range hsh.config.Devices {
+		hsh.logger.Debug().
+			Str("device_id", deviceConfig.ID).
+			Str("device_type", deviceConfig.Type).
+			Str("device_address", deviceConfig.Address).
+			Msg("[DEBUG] Processing device from config")
+			
 		deviceInfo, err := hsh.deviceMgr.GetDeviceInfo(deviceConfig.ID)
 		if err != nil {
 			hsh.logger.Warn().
@@ -740,18 +751,52 @@ func (hsh *HubServiceHandler) handleListAction(req *hermes.ServiceRequest) (*her
 				Msg("Failed to get device info")
 			continue
 		}
-		devices = append(devices, deviceInfo)
+		
+		// Create complete device data by combining DeviceConfig and DeviceInfo
+		completeDeviceInfo := map[string]interface{}{
+			"id":           deviceConfig.ID,           // From config
+			"name":         deviceConfig.Model,       // Use model as name for now
+			"type":         deviceConfig.Type,        // From config
+			"model":        deviceInfo.Model,         // From device
+			"address":      deviceConfig.Address,     // From config
+			"status":       "online",                 // Default status
+			"capabilities": deviceConfig.Capabilities, // From config (more complete than device)
+		}
+		
+		hsh.logger.Info().
+			Str("device_id", deviceConfig.ID).
+			Str("device_name", deviceConfig.Model).
+			Str("device_type", deviceConfig.Type).
+			Str("device_model", deviceInfo.Model).
+			Str("device_address", deviceConfig.Address).
+			Interface("capabilities", deviceConfig.Capabilities).
+			Msg("[DEBUG] Hub sending device data")
+		
+		devices = append(devices, completeDeviceInfo)
 	}
+
+	responseData := map[string]interface{}{
+		"devices": devices,
+		"hub_id":  hsh.config.Hub.ID,
+		"count":   len(devices),
+	}
+	
+	hsh.logger.Info().
+		Str("hub_id", hsh.config.Hub.ID).
+		Int("device_count", len(devices)).
+		Interface("response_data", responseData).
+		Msg("[DEBUG] Hub sending device list response")
+
+	hsh.logger.Info().
+		Str("request_message_id", req.MessageID).
+		Str("request_service", req.Service).
+		Msg("[DEBUG] Hub creating response with message ID from request")
 
 	return hermes.CreateServiceResponse(
 		req.MessageID,
 		req.Service,
 		true,
-		map[string]interface{}{
-			"devices": devices,
-			"hub_id":  hsh.config.Hub.ID,
-			"count":   len(devices),
-		},
+		responseData,
 		nil,
 	), nil
 }

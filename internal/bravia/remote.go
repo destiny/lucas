@@ -26,9 +26,12 @@ func NewBraviaRemoteWithFlags(address, credential string, debug, testMode bool) 
 	return &BraviaRemote{
 		client: client,
 		info: device.DeviceInfo{
+			ID:      "", // Will be set from configuration
+			Name:    "", // Will be set from configuration  
 			Type:    "bravia_tv",
 			Model:   "Sony Bravia",
 			Address: address,
+			Status:  "unknown", // Will be determined by hub
 			Capabilities: []string{
 				"remote_control",
 				"system_control",
