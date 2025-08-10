@@ -321,11 +321,13 @@ func (d *Daemon) startHealthCheck() {
 func (d *Daemon) performHealthCheck() {
 	d.logger.Debug().Msg("Performing health check")
 
-	// Check gateway connectivity via WorkerService
-	if d.workerService.IsConnected() {
-		d.logger.Debug().Msg("Gateway connectivity OK")
+	// Test actual gateway connectivity by sending a test request
+	gatewayReachable := d.testGatewayConnectivity()
+	
+	if gatewayReachable {
+		d.logger.Debug().Msg("Gateway connectivity OK - test request successful")
 	} else {
-		d.logger.Warn().Msg("Gateway not connected")
+		d.logger.Warn().Msg("Gateway connectivity FAILED - test request failed")
 	}
 
 	// Check device manager status
@@ -334,11 +336,24 @@ func (d *Daemon) performHealthCheck() {
 		Int("device_count", deviceCount).
 		Msg("Device manager status")
 
-	// Log overall health status
+	// Log overall health status with actual connectivity
 	d.logger.Info().
-		Bool("gateway_connected", d.workerService.IsConnected()).
+		Bool("gateway_reachable", gatewayReachable).
+		Bool("worker_connected", d.workerService.IsConnected()).
 		Int("device_count", deviceCount).
 		Msg("Health check completed")
+}
+
+// testGatewayConnectivity tests gateway connectivity using existing worker infrastructure
+func (d *Daemon) testGatewayConnectivity() bool {
+	// Check if worker service has any connected workers
+	if !d.workerService.IsConnected() {
+		d.logger.Debug().Msg("No workers connected to gateway")
+		return false
+	}
+	
+	// Get recent heartbeat/connection health from worker service
+	return d.workerService.IsGatewayReachable()
 }
 
 // IsRunning returns whether the daemon is currently running

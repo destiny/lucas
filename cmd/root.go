@@ -35,9 +35,43 @@ func Execute() error {
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	
+	// Initialize gateway command configuration
+	initGatewayCmd()
+	
 	// Add subcommands
 	rootCmd.AddCommand(cliCmd)
 	rootCmd.AddCommand(hubCmd)
+	rootCmd.AddCommand(gatewayCmd)
+}
+
+// initGatewayCmd initializes the gateway command and its subcommands
+func initGatewayCmd() {
+	// This is moved from gateway.go init() function
+	// Main gateway command flags
+	gatewayCmd.Flags().StringVarP(&gatewayConfigPath, "config", "c", "gateway.yml", "Path to configuration file")
+	gatewayCmd.Flags().StringVar(&gatewayDBPath, "db", "", "Path to SQLite database file (overrides config)")
+	gatewayCmd.Flags().StringVar(&gatewayKeysPath, "keys", "", "Path to gateway keys file (overrides config)")
+	gatewayCmd.Flags().StringVar(&gatewayZMQAddr, "zmq-addr", "", "ZMQ server bind address (overrides config)")
+	gatewayCmd.Flags().StringVar(&gatewayAPIAddr, "api-addr", "", "HTTP API server address (overrides config)")
+	gatewayCmd.Flags().BoolVarP(&gatewayDebugFlag, "debug", "d", false, "Enable debug logging (overrides config)")
+
+	// Add subcommands
+	gatewayCmd.AddCommand(gatewayKeysCmd)
+	gatewayCmd.AddCommand(gatewayStatusCmd)
+	gatewayCmd.AddCommand(gatewayInitCmd)
+
+	// Status command flags
+	gatewayStatusCmd.Flags().BoolVarP(&gatewayVerboseStatus, "verbose", "v", false, "Show detailed status information in JSON format")
+	gatewayStatusCmd.Flags().StringVarP(&gatewayConfigPath, "config", "c", "gateway.yml", "Path to configuration file")
+	gatewayStatusCmd.Flags().StringVar(&gatewayAPIAddr, "api-addr", "", "API server address to check (overrides config)")
+
+	// Keys subcommands
+	gatewayKeysCmd.AddCommand(gatewayKeysGenerateCmd)
+	gatewayKeysCmd.AddCommand(gatewayKeysShowCmd)
+
+	// Keys command flags (these still use the old defaults for backward compatibility)
+	gatewayKeysGenerateCmd.Flags().StringVar(&gatewayKeysPath, "keys", "gateway_keys.yml", "Path for generated keys file")
+	gatewayKeysShowCmd.Flags().StringVar(&gatewayKeysPath, "keys", "gateway_keys.yml", "Path to keys file")
 }
 
 func exitWithError(err error) {

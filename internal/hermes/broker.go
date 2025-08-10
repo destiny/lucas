@@ -362,21 +362,70 @@ func (b *Broker) handleWorkerReply(workerID, clientID string, reply []byte) erro
 	worker.mutex.Unlock()
 
 	// Check if this is an immediate device list response from hub.control service
-	if clientID == "gateway_immediate" && worker.Service == "hub.control" {
-		b.logger.Info().
-			Str("hub_id", workerID).
-			Int("response_size", len(reply)).
-			Msg("Received immediate device list response from hub")
+	// Use standardized client ID from jargon specification
+	if clientID == "gateway_main" && worker.Service == "hub.control" {
+		// Parse the response to determine if it's actually a device list response
+		// Device list responses should have specific characteristics
+		isDeviceListResponse := false
 		
-		// Process device list response via broker service
-		if b.brokerService != nil {
-			if bs, ok := b.brokerService.(interface {
-				ProcessDeviceListResponse(hubID string, response []byte)
-			}); ok {
-				bs.ProcessDeviceListResponse(workerID, reply)
+		// Try to parse the response to check if it's a device list
+		var serviceResp ServiceResponse
+		if err := json.Unmarshal(reply, &serviceResp); err == nil {
+			if dataMap, ok := serviceResp.Data.(map[string]interface{}); ok {
+				// Device list responses have "devices" field AND "hub_id" field
+				// Action responses have "data" field or error messages
+				if _, hasDevices := dataMap["devices"]; hasDevices {
+					if _, hasHubID := dataMap["hub_id"]; hasHubID {
+						isDeviceListResponse = true
+					}
+				}
+				
+				// Additional check: if response has error data typical of action responses, not device list
+				if !isDeviceListResponse {
+					// Action error responses typically have "success": false and error messages
+					if successVal, hasSuccess := dataMap["success"]; hasSuccess {
+						if success, ok := successVal.(bool); ok && !success {
+							// This is likely an action error response, not device list
+							b.logger.Debug().
+								Str("hub_id", workerID).
+								Str("response_type", "action_error").
+								Msg("Detected action error response - routing to client")
+						}
+					} else if dataVal, hasData := dataMap["data"]; hasData {
+						// Action success responses have "data" field with action result
+						if dataStr, ok := dataVal.(string); ok && len(dataStr) > 0 {
+							b.logger.Debug().
+								Str("hub_id", workerID).
+								Str("response_type", "action_success").
+								Msg("Detected action success response - routing to client")
+						}
+					}
+				}
 			}
 		}
-		return nil
+		
+		if isDeviceListResponse {
+			b.logger.Info().
+				Str("hub_id", workerID).
+				Int("response_size", len(reply)).
+				Msg("Received immediate device list response from hub")
+			
+			// Process device list response via broker service
+			if b.brokerService != nil {
+				if bs, ok := b.brokerService.(interface {
+					ProcessDeviceListResponse(hubID string, response []byte)
+				}); ok {
+					bs.ProcessDeviceListResponse(workerID, reply)
+				}
+			}
+			return nil
+		} else {
+			b.logger.Debug().
+				Str("hub_id", workerID).
+				Int("response_size", len(reply)).
+				Msg("Received device action response from hub - routing to client")
+			// Fall through to normal client routing
+		}
 	}
 
 	// Send reply to client for regular requests
@@ -824,7 +873,8 @@ func (b *Broker) sendImmediateDeviceListRequest(hubID string) {
 	}
 
 	// Send request directly to the hub worker via broker socket
-	if err := b.sendToWorker(hubID, "gateway_immediate", requestBytes); err != nil {
+	// Use standardized client ID from jargon specification
+	if err := b.sendToWorker(hubID, "gateway_main", requestBytes); err != nil {
 		b.logger.Error().
 			Str("hub_id", hubID).
 			Err(err).

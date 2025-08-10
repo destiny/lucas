@@ -24,6 +24,9 @@ type BrokerService struct {
 	cancel       context.CancelFunc
 	hubHandlers  map[string]*HubServiceHandler
 	mutex        sync.RWMutex
+	// Single persistent client for all gateway-hub communication
+	client       *hermes.HermesClient
+	clientMutex  sync.Mutex
 }
 
 // ServiceRegistry manages device services and their providers
@@ -85,7 +88,7 @@ type HubServiceHandler struct {
 func NewBrokerService(address string, keys *GatewayKeys, database *Database) *BrokerService {
 	ctx, cancel := context.WithCancel(context.Background())
 	
-	return &BrokerService{
+	bs := &BrokerService{
 		broker:      hermes.NewBroker(address),
 		registry:    NewServiceRegistry(),
 		database:    database,
@@ -95,6 +98,13 @@ func NewBrokerService(address string, keys *GatewayKeys, database *Database) *Br
 		cancel:      cancel,
 		hubHandlers: make(map[string]*HubServiceHandler),
 	}
+	
+	// Initialize persistent client for all gateway-hub communication
+	// Use standardized client ID from jargon specification
+	clientAddress := bs.convertBrokerAddressToClient(address)
+	bs.client = hermes.NewClient(clientAddress, "gateway_main")
+	
+	return bs
 }
 
 // NewServiceRegistry creates a new service registry
@@ -108,12 +118,23 @@ func NewServiceRegistry() *ServiceRegistry {
 func (bs *BrokerService) Start() error {
 	bs.logger.Info().Msg("Starting Gateway Broker Service")
 
+	// Start persistent client first
+	bs.clientMutex.Lock()
+	if err := bs.client.Start(); err != nil {
+		bs.clientMutex.Unlock()
+		return fmt.Errorf("failed to start persistent client: %w", err)
+	}
+	bs.clientMutex.Unlock()
 
 	// Set broker service reference for immediate device list processing
 	bs.broker.SetBrokerService(bs)
 
 	// Start Hermes broker
 	if err := bs.broker.Start(); err != nil {
+		// Stop client if broker fails
+		bs.clientMutex.Lock()
+		bs.client.Stop()
+		bs.clientMutex.Unlock()
 		return fmt.Errorf("failed to start Hermes broker: %w", err)
 	}
 
@@ -131,6 +152,15 @@ func (bs *BrokerService) Stop() error {
 	bs.logger.Info().Msg("Stopping Gateway Broker Service")
 
 	bs.cancel()
+
+	// Stop persistent client
+	bs.clientMutex.Lock()
+	if bs.client != nil {
+		if err := bs.client.Stop(); err != nil {
+			bs.logger.Error().Err(err).Msg("Error stopping persistent client")
+		}
+	}
+	bs.clientMutex.Unlock()
 
 	if bs.broker != nil {
 		if err := bs.broker.Stop(); err != nil {
@@ -269,61 +299,92 @@ func (bs *BrokerService) SendDeviceCommand(hubID, deviceID string, action json.R
 		Str("device_id", deviceID).
 		Msg("Sending device command via broker service")
 
-	// Get device information from database
-	device, _, err := bs.database.FindDeviceByID(deviceID)
+	// Verify device exists (but we don't need device details for routing)
+	_, _, err := bs.database.FindDeviceByID(deviceID)
 	if err != nil {
 		return nil, fmt.Errorf("device not found: %w", err)
 	}
 
-	// Create service request
-	serviceName := fmt.Sprintf("device.%s", device.DeviceType)
+	// Always route through hub.control (single hub worker)
+	serviceName := "hub.control"
+	
+	// Create device command that hub will route internally
+	deviceCommand := map[string]interface{}{
+		"device_id": deviceID,
+		"action":    json.RawMessage(action),
+	}
+	
+	deviceCommandBytes, err := json.Marshal(deviceCommand)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal device command: %w", err)
+	}
+	
+	// Generate simple nonce for request deduplication
+	nonce := hermes.GenerateNonce()
+	
+	bs.logger.Debug().
+		Str("hub_id", hubID).
+		Str("device_id", deviceID).
+		Str("nonce", nonce).
+		Msg("Generated simple nonce for device command")
+	
+	messageID := hermes.GenerateMessageID()
 	
 	deviceRequest := hermes.ServiceRequest{
-		MessageID: hermes.GenerateMessageID(),
+		MessageID: messageID,
 		Service:   serviceName,
 		Action:    "execute",
-		Payload:   action,
+		Payload:   json.RawMessage(deviceCommandBytes),
+		Nonce:     nonce,
 	}
+	
+	bs.logger.Debug().
+		Str("hub_id", hubID).
+		Str("device_id", deviceID).
+		Str("message_id", messageID).
+		Str("nonce", nonce).
+		Str("service", serviceName).
+		Msg("Sending service request to hub")
 
 	requestBytes, err := json.Marshal(deviceRequest)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal device request: %w", err)
 	}
 
-	// Create client for this request
-	client := hermes.NewClient(bs.broker.GetAddress(), fmt.Sprintf("gateway_%d", time.Now().UnixNano()))
-	if err := client.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start client: %w", err)
+	// Use fire-and-forget mode for remote control commands
+	// This provides immediate response to user and handles responses asynchronously
+	bs.clientMutex.Lock()
+	defer bs.clientMutex.Unlock()
+	
+	if bs.client == nil {
+		return nil, fmt.Errorf("persistent client not initialized")
 	}
-	defer client.Stop()
 
-	// Send request via Hermes
-	response, err := client.RequestWithTimeout(serviceName, requestBytes, 30*time.Second)
+	// Send as fire-and-forget request using nonce correlation
+	err = bs.client.RequestFireAndForget(serviceName, requestBytes, nonce)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send device command: %w", err)
 	}
 
-	// Parse service response
-	var serviceResp hermes.ServiceResponse
-	if err := json.Unmarshal(response, &serviceResp); err != nil {
-		return nil, fmt.Errorf("failed to parse service response: %w", err)
+	// Return success immediately - response will be handled asynchronously if it arrives
+	successResponse := map[string]interface{}{
+		"success":    true,
+		"message":    "Command sent to device",
+		"device_id":  deviceID,
+		"nonce":      nonce,
+		"message_id": messageID,
 	}
 
-	if !serviceResp.Success {
-		return nil, fmt.Errorf("service error: %s", serviceResp.Error)
-	}
-
-	// Return the data as JSON
-	dataBytes, err := json.Marshal(serviceResp.Data)
+	dataBytes, err := json.Marshal(successResponse)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal response data: %w", err)
+		return nil, fmt.Errorf("failed to marshal success response: %w", err)
 	}
 
 	bs.logger.Info().
 		Str("hub_id", hubID).
 		Str("device_id", deviceID).
-		Str("message_id", serviceResp.MessageID).
-		Msg("Device command executed successfully")
+		Str("nonce", nonce).
+		Msg("Device command sent (fire-and-forget)")
 
 	return dataBytes, nil
 }
@@ -450,10 +511,8 @@ func (bs *BrokerService) processHubWorkerRegistration(hubID, serviceName string)
 }
 
 
-// getClientAddress converts broker bind address to client connection address
-func (bs *BrokerService) getClientAddress() string {
-	brokerAddr := bs.broker.GetAddress()
-	
+// convertBrokerAddressToClient converts broker bind address to client connection address
+func (bs *BrokerService) convertBrokerAddressToClient(brokerAddr string) string {
 	// Convert bind addresses to client connection addresses
 	if strings.Contains(brokerAddr, "tcp://*:") {
 		// Replace * with localhost
@@ -466,6 +525,11 @@ func (bs *BrokerService) getClientAddress() string {
 	
 	// Return as-is for other addresses
 	return brokerAddr
+}
+
+// getClientAddress converts broker bind address to client connection address (legacy method)
+func (bs *BrokerService) getClientAddress() string {
+	return bs.convertBrokerAddressToClient(bs.broker.GetAddress())
 }
 
 // ProcessDeviceListResponse processes the device list response and registers devices
@@ -502,6 +566,22 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 		return
 	}
 
+	// Check if this is actually a device action response, not a device list response
+	// Device action responses have different data structure
+	if dataMap, ok := serviceResp.Data.(map[string]interface{}); ok {
+		// Check if this looks like a device action response (has "data" field but no "devices" field)
+		if _, hasData := dataMap["data"]; hasData {
+			if _, hasDevices := dataMap["devices"]; !hasDevices {
+				bs.logger.Debug().
+					Str("hub_id", hubID).
+					Str("message_id", serviceResp.MessageID).
+					Interface("response_data", dataMap).
+					Msg("This appears to be a device action response, not a device list - ignoring in device list handler")
+				return
+			}
+		}
+	}
+
 	// Get hub record from database
 	hub, err := bs.database.GetHubByHubID(hubID)
 	if err != nil {
@@ -526,6 +606,26 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 		Str("hub_id", hubID).
 		Interface("data_map", dataMap).
 		Msg("[DEBUG] Gateway extracted data map")
+
+	// Check if the data contains error information instead of device list
+	if errorMsg, hasError := dataMap["error"]; hasError {
+		bs.logger.Warn().
+			Str("hub_id", hubID).
+			Interface("error", errorMsg).
+			Msg("Hub returned error data instead of device list - this is expected for offline devices")
+		return
+	}
+
+	// Check if inner response indicates failure
+	if innerSuccess, hasInnerSuccess := dataMap["success"]; hasInnerSuccess {
+		if success, ok := innerSuccess.(bool); ok && !success {
+			bs.logger.Warn().
+				Str("hub_id", hubID).
+				Interface("available_keys", getKeys(dataMap)).
+				Msg("Hub returned unsuccessful response - this is expected for offline devices")
+			return
+		}
+	}
 
 	devicesData, ok := dataMap["devices"]
 	if !ok {

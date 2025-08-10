@@ -21,6 +21,8 @@ type PendingClientRequest struct {
 	Error     chan error
 	Timestamp time.Time
 	Timeout   time.Duration
+	Nonce     string    // Add nonce for correlation
+	FireAndForget bool  // If true, don't wait for response
 }
 
 // ClientStats represents client statistics
@@ -42,7 +44,8 @@ type HermesClient struct {
 	socket       *zmq4.Socket
 	timeout      time.Duration
 	retries      int
-	pending      map[string]*PendingClientRequest
+	pending      map[string]*PendingClientRequest  // Keyed by message ID
+	pendingNonces map[string]*PendingClientRequest // Keyed by nonce for optional correlation
 	ctx          context.Context
 	cancel       context.CancelFunc
 	logger       zerolog.Logger
@@ -56,14 +59,15 @@ func NewClient(broker, identity string) *HermesClient {
 	ctx, cancel := context.WithCancel(context.Background())
 	
 	return &HermesClient{
-		broker:    broker,
-		identity:  identity,
-		timeout:   30 * time.Second, // Default request timeout
-		retries:   3,                // Default retry count
-		pending:   make(map[string]*PendingClientRequest),
-		ctx:       ctx,
-		cancel:    cancel,
-		logger:    logger.New(),
+		broker:        broker,
+		identity:      identity,
+		timeout:       30 * time.Second, // Default request timeout
+		retries:       3,                // Default retry count
+		pending:       make(map[string]*PendingClientRequest),
+		pendingNonces: make(map[string]*PendingClientRequest),
+		ctx:           ctx,
+		cancel:        cancel,
+		logger:        logger.New(),
 		stats: &ClientStats{
 			StartTime: time.Now(),
 		},
@@ -371,6 +375,68 @@ func (c *HermesClient) RequestAsync(service string, body []byte, callback func([
 	return nil
 }
 
+// RequestFireAndForget sends a request that doesn't wait for a response (fire-and-forget)
+// Uses nonce-based correlation for optional response matching
+func (c *HermesClient) RequestFireAndForget(service string, body []byte, nonce string) error {
+	messageID := GenerateMessageID()
+	
+	c.logger.Debug().
+		Str("service", service).
+		Str("message_id", messageID).
+		Str("nonce", nonce).
+		Int("body_size", len(body)).
+		Msg("Sending fire-and-forget request to service")
+
+	// Create pending request for optional response tracking
+	pending := &PendingClientRequest{
+		MessageID:     messageID,
+		Service:       service,
+		Body:          body,
+		Response:      nil, // No response channel for fire-and-forget
+		Error:         nil, // No error channel for fire-and-forget
+		Timestamp:     time.Now(),
+		Timeout:       5 * time.Second, // Short timeout for cleanup only
+		Nonce:         nonce,
+		FireAndForget: true,
+	}
+
+	// Store pending request for nonce-based response correlation (optional)
+	c.mutex.Lock()
+	if nonce != "" {
+		c.pendingNonces[nonce] = pending
+	}
+	c.mutex.Unlock()
+
+	// Send request
+	if err := c.sendRequest(service, messageID, body); err != nil {
+		c.mutex.Lock()
+		if nonce != "" {
+			delete(c.pendingNonces, nonce)
+		}
+		c.stats.RequestsFailed++
+		c.mutex.Unlock()
+		return err
+	}
+
+	// Update stats - consider fire-and-forget as successful send
+	c.mutex.Lock()
+	c.stats.RequestsSent++
+	c.stats.LastRequest = time.Now()
+	c.mutex.Unlock()
+
+	// Clean up nonce after timeout (to prevent memory leaks)
+	if nonce != "" {
+		go func() {
+			time.Sleep(pending.Timeout)
+			c.mutex.Lock()
+			delete(c.pendingNonces, nonce)
+			c.mutex.Unlock()
+		}()
+	}
+
+	return nil
+}
+
 // sendRequest sends a request to the broker
 func (c *HermesClient) sendRequest(service, messageID string, body []byte) error {
 	if c.socket == nil {
@@ -483,14 +549,57 @@ func (c *HermesClient) handleResponse(responseBytes []byte) error {
 
 // handleServiceResponse handles a structured service response
 func (c *HermesClient) handleServiceResponse(resp *ServiceResponse) error {
+	// Try message ID correlation first
 	c.mutex.RLock()
 	pending, exists := c.pending[resp.MessageID]
 	c.mutex.RUnlock()
 
+	// If no message ID match, try nonce-based correlation
+	if !exists && resp.Nonce != "" {
+		c.mutex.RLock()
+		noncePending, nonceExists := c.pendingNonces[resp.Nonce]
+		c.mutex.RUnlock()
+
+		if nonceExists {
+			c.logger.Debug().
+				Str("message_id", resp.MessageID).
+				Str("nonce", resp.Nonce).
+				Bool("fire_and_forget", noncePending.FireAndForget).
+				Msg("Matched response using nonce correlation")
+			
+			// For fire-and-forget requests, just log and cleanup
+			if noncePending.FireAndForget {
+				c.mutex.Lock()
+				delete(c.pendingNonces, resp.Nonce)
+				c.stats.ResponsesReceived++
+				c.stats.LastResponse = time.Now()
+				c.mutex.Unlock()
+				
+				c.logger.Debug().
+					Str("nonce", resp.Nonce).
+					Bool("success", resp.Success).
+					Msg("Received response for fire-and-forget request")
+				return nil
+			}
+			
+			// For regular async requests with nonce, use nonce pending request
+			pending = noncePending
+			exists = true
+		}
+	}
+
 	if !exists {
-		c.logger.Warn().
-			Str("message_id", resp.MessageID).
-			Msg("Received response for unknown request")
+		// Only warn if this doesn't look like a fire-and-forget response
+		if resp.Nonce == "" {
+			c.logger.Warn().
+				Str("message_id", resp.MessageID).
+				Msg("Received response for unknown request")
+		} else {
+			c.logger.Debug().
+				Str("message_id", resp.MessageID).
+				Str("nonce", resp.Nonce).
+				Msg("Received response for unknown nonce (likely fire-and-forget)")
+		}
 		return nil
 	}
 

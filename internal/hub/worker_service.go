@@ -45,15 +45,7 @@ type ServiceWorkerStats struct {
 	WorkerIdentity string    `json:"worker_identity"`
 }
 
-// DeviceServiceHandler handles device-specific service requests (legacy)
-type DeviceServiceHandler struct {
-	deviceType string
-	deviceMgr  *DeviceManager
-	config     *Config
-	logger     zerolog.Logger
-	stats      *ServiceHandlerStats
-	mutex      sync.RWMutex
-}
+// DeviceServiceHandler removed - using single HubServiceHandler for all devices
 
 // HubServiceHandler handles requests for any device through the hub
 type HubServiceHandler struct {
@@ -260,6 +252,27 @@ func (ws *WorkerService) IsConnected() bool {
 	return false
 }
 
+// IsGatewayReachable returns whether the gateway is actually reachable (better health check)
+func (ws *WorkerService) IsGatewayReachable() bool {
+	ws.mutex.RLock()
+	defer ws.mutex.RUnlock()
+	
+	// Check if any workers are connected AND recently communicated with gateway
+	for _, worker := range ws.workers {
+		if worker.IsConnected() {
+			// Check if worker has recent heartbeat activity
+			stats := worker.GetStats()
+			timeSinceLastHeartbeat := time.Since(stats.LastHeartbeatReceived)
+			
+			// Consider gateway reachable if heartbeat was recent (within 2 minutes)
+			if timeSinceLastHeartbeat < 2*time.Minute {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // monitorWorkers monitors worker health and statistics
 func (ws *WorkerService) monitorWorkers() {
 	ticker := time.NewTicker(30 * time.Second)
@@ -304,295 +317,7 @@ func (ws *WorkerService) updateWorkerStats() {
 	}
 }
 
-// DeviceServiceHandler methods
-
-// NewDeviceServiceHandler creates a new device service handler
-func NewDeviceServiceHandler(deviceType string, deviceMgr *DeviceManager, config *Config) *DeviceServiceHandler {
-	return &DeviceServiceHandler{
-		deviceType: deviceType,
-		deviceMgr:  deviceMgr,
-		config:     config,
-		logger:     logger.New(),
-		stats:      &ServiceHandlerStats{},
-	}
-}
-
-// Handle implements the hermes.RequestHandler interface
-func (dsh *DeviceServiceHandler) Handle(request []byte) ([]byte, error) {
-	startTime := time.Now()
-	
-	dsh.mutex.Lock()
-	dsh.stats.RequestsProcessed++
-	dsh.stats.LastRequest = startTime
-	dsh.mutex.Unlock()
-
-	dsh.logger.Debug().
-		Str("device_type", dsh.deviceType).
-		Int("request_size", len(request)).
-		Msg("Processing device service request")
-
-	// Parse service request
-	var serviceReq hermes.ServiceRequest
-	if err := json.Unmarshal(request, &serviceReq); err != nil {
-		dsh.recordError()
-		return nil, fmt.Errorf("failed to parse service request: %w", err)
-	}
-
-	// Validate request
-	if err := hermes.ValidateMessage(&serviceReq); err != nil {
-		dsh.recordError()
-		return nil, fmt.Errorf("invalid service request: %w", err)
-	}
-
-	// Process based on action
-	var response *hermes.ServiceResponse
-	var err error
-
-	switch serviceReq.Action {
-	case "execute":
-		response, err = dsh.handleExecuteAction(&serviceReq)
-	case "list":
-		response, err = dsh.handleListAction(&serviceReq)
-	case "status":
-		response, err = dsh.handleStatusAction(&serviceReq)
-	case "info":
-		response, err = dsh.handleInfoAction(&serviceReq)
-	default:
-		dsh.recordError()
-		return nil, fmt.Errorf("unknown action: %s", serviceReq.Action)
-	}
-
-	if err != nil {
-		dsh.recordError()
-		// Create error response
-		response = hermes.CreateServiceResponse(
-			serviceReq.MessageID,
-			serviceReq.Service,
-			false,
-			nil,
-			err,
-		)
-	}
-
-	// Set nonce if present
-	if serviceReq.Nonce != "" {
-		response.Nonce = serviceReq.Nonce
-	}
-
-	// Record latency
-	latency := time.Since(startTime)
-	dsh.recordLatency(latency)
-
-	// Serialize response
-	responseBytes, err := hermes.SerializeServiceResponse(response)
-	if err != nil {
-		dsh.recordError()
-		return nil, fmt.Errorf("failed to serialize response: %w", err)
-	}
-
-	dsh.logger.Debug().
-		Str("device_type", dsh.deviceType).
-		Str("action", serviceReq.Action).
-		Str("message_id", serviceReq.MessageID).
-		Bool("success", response.Success).
-		Dur("latency", latency).
-		Msg("Device service request processed")
-
-	return responseBytes, nil
-}
-
-// handleExecuteAction handles device command execution
-func (dsh *DeviceServiceHandler) handleExecuteAction(req *hermes.ServiceRequest) (*hermes.ServiceResponse, error) {
-	// Parse device command from payload
-	var deviceCmd struct {
-		DeviceID string          `json:"device_id"`
-		Action   json.RawMessage `json:"action"`
-	}
-	
-	if err := json.Unmarshal(req.Payload, &deviceCmd); err != nil {
-		return nil, fmt.Errorf("failed to parse device command: %w", err)
-	}
-
-	if deviceCmd.DeviceID == "" {
-		return nil, fmt.Errorf("device_id is required")
-	}
-
-	// Execute device action with nonce support
-	var response interface{}
-	var err error
-	
-	if req.Nonce != "" {
-		// Use nonce-based deduplication
-		deviceResponse, deviceErr := dsh.deviceMgr.ProcessDeviceActionWithNonce(
-			deviceCmd.DeviceID,
-			req.Nonce,
-			deviceCmd.Action,
-		)
-		response = deviceResponse
-		err = deviceErr
-	} else {
-		// Standard processing without nonce
-		deviceResponse, deviceErr := dsh.deviceMgr.ProcessDeviceAction(
-			deviceCmd.DeviceID,
-			deviceCmd.Action,
-		)
-		response = deviceResponse
-		err = deviceErr
-	}
-
-	return hermes.CreateServiceResponse(
-		req.MessageID,
-		req.Service,
-		err == nil,
-		response,
-		err,
-	), nil
-}
-
-// handleListAction handles device listing requests
-func (dsh *DeviceServiceHandler) handleListAction(req *hermes.ServiceRequest) (*hermes.ServiceResponse, error) {
-	// Get all devices of this type
-	devices := make([]interface{}, 0)
-	
-	for _, deviceConfig := range dsh.config.Devices {
-		if deviceConfig.Type == dsh.deviceType {
-			deviceInfo, err := dsh.deviceMgr.GetDeviceInfo(deviceConfig.ID)
-			if err != nil {
-				dsh.logger.Warn().
-					Str("device_id", deviceConfig.ID).
-					Err(err).
-					Msg("Failed to get device info")
-				continue
-			}
-			devices = append(devices, deviceInfo)
-		}
-	}
-
-	return hermes.CreateServiceResponse(
-		req.MessageID,
-		req.Service,
-		true,
-		map[string]interface{}{
-			"devices":     devices,
-			"device_type": dsh.deviceType,
-			"count":       len(devices),
-		},
-		nil,
-	), nil
-}
-
-// handleStatusAction handles service status requests
-func (dsh *DeviceServiceHandler) handleStatusAction(req *hermes.ServiceRequest) (*hermes.ServiceResponse, error) {
-	dsh.mutex.RLock()
-	stats := *dsh.stats
-	dsh.mutex.RUnlock()
-
-	// Count devices of this type
-	deviceCount := 0
-	for _, deviceConfig := range dsh.config.Devices {
-		if deviceConfig.Type == dsh.deviceType {
-			deviceCount++
-		}
-	}
-
-	statusData := map[string]interface{}{
-		"device_type":        dsh.deviceType,
-		"device_count":       deviceCount,
-		"requests_processed": stats.RequestsProcessed,
-		"requests_failed":    stats.RequestsFailed,
-		"last_request":       stats.LastRequest,
-		"average_latency_ms": stats.AverageLatency,
-		"error_rate":         stats.ErrorRate,
-		"status":             "healthy",
-	}
-
-	return hermes.CreateServiceResponse(
-		req.MessageID,
-		req.Service,
-		true,
-		statusData,
-		nil,
-	), nil
-}
-
-// handleInfoAction handles service information requests
-func (dsh *DeviceServiceHandler) handleInfoAction(req *hermes.ServiceRequest) (*hermes.ServiceResponse, error) {
-	// Collect capabilities from devices of this type
-	capabilities := make(map[string]bool)
-	devices := make([]string, 0)
-	
-	for _, deviceConfig := range dsh.config.Devices {
-		if deviceConfig.Type == dsh.deviceType {
-			devices = append(devices, deviceConfig.ID)
-			for _, cap := range deviceConfig.Capabilities {
-				capabilities[cap] = true
-			}
-		}
-	}
-
-	// Convert capabilities map to slice
-	capSlice := make([]string, 0, len(capabilities))
-	for cap := range capabilities {
-		capSlice = append(capSlice, cap)
-	}
-
-	infoData := map[string]interface{}{
-		"service_name":  fmt.Sprintf("device.%s", dsh.deviceType),
-		"device_type":   dsh.deviceType,
-		"description":   fmt.Sprintf("Service for %s devices", dsh.deviceType),
-		"capabilities":  capSlice,
-		"device_ids":    devices,
-		"device_count":  len(devices),
-		"version":       "1.0.0",
-	}
-
-	return hermes.CreateServiceResponse(
-		req.MessageID,
-		req.Service,
-		true,
-		infoData,
-		nil,
-	), nil
-}
-
-// recordError records a failed request
-func (dsh *DeviceServiceHandler) recordError() {
-	dsh.mutex.Lock()
-	defer dsh.mutex.Unlock()
-	
-	dsh.stats.RequestsFailed++
-	
-	// Calculate error rate
-	if dsh.stats.RequestsProcessed > 0 {
-		dsh.stats.ErrorRate = float64(dsh.stats.RequestsFailed) / float64(dsh.stats.RequestsProcessed)
-	}
-}
-
-// recordLatency records request latency for statistics
-func (dsh *DeviceServiceHandler) recordLatency(latency time.Duration) {
-	dsh.mutex.Lock()
-	defer dsh.mutex.Unlock()
-	
-	// Simple moving average calculation
-	// In a production system, you might want to use a more sophisticated approach
-	latencyMs := float64(latency.Nanoseconds()) / 1e6
-	
-	if dsh.stats.AverageLatency == 0 {
-		dsh.stats.AverageLatency = latencyMs
-	} else {
-		// Exponential moving average with alpha = 0.1
-		dsh.stats.AverageLatency = 0.9*dsh.stats.AverageLatency + 0.1*latencyMs
-	}
-}
-
-// GetStats returns handler statistics
-func (dsh *DeviceServiceHandler) GetStats() *ServiceHandlerStats {
-	dsh.mutex.RLock()
-	defer dsh.mutex.RUnlock()
-	
-	stats := *dsh.stats
-	return &stats
-}
+// DeviceServiceHandler methods removed - using single HubServiceHandler
 
 // HubServiceHandler methods
 
@@ -642,19 +367,15 @@ func (hsh *HubServiceHandler) Handle(request []byte) ([]byte, error) {
 
 	if err != nil {
 		hsh.recordError()
-		// Create error response
-		response = hermes.CreateServiceResponse(
+		// Create error response with nonce
+		response = hermes.CreateServiceResponseWithNonce(
 			serviceReq.MessageID,
 			serviceReq.Service,
+			serviceReq.Nonce,
 			false,
 			nil,
 			err,
 		)
-	}
-
-	// Set nonce if present
-	if serviceReq.Nonce != "" {
-		response.Nonce = serviceReq.Nonce
 	}
 
 	// Record latency
@@ -717,9 +438,10 @@ func (hsh *HubServiceHandler) handleExecuteAction(req *hermes.ServiceRequest) (*
 		err = deviceErr
 	}
 
-	return hermes.CreateServiceResponse(
+	return hermes.CreateServiceResponseWithNonce(
 		req.MessageID,
 		req.Service,
+		req.Nonce,
 		err == nil,
 		response,
 		err,
@@ -742,32 +464,24 @@ func (hsh *HubServiceHandler) handleListAction(req *hermes.ServiceRequest) (*her
 			Str("device_type", deviceConfig.Type).
 			Str("device_address", deviceConfig.Address).
 			Msg("[DEBUG] Processing device from config")
-			
-		deviceInfo, err := hsh.deviceMgr.GetDeviceInfo(deviceConfig.ID)
-		if err != nil {
-			hsh.logger.Warn().
-				Str("device_id", deviceConfig.ID).
-				Err(err).
-				Msg("Failed to get device info")
-			continue
-		}
 		
-		// Create complete device data by combining DeviceConfig and DeviceInfo
+		// Create device data from static config only - don't call device network operations
+		// Device list should work regardless of device online/offline status
 		completeDeviceInfo := map[string]interface{}{
 			"id":           deviceConfig.ID,           // From config
-			"name":         deviceConfig.Model,       // Use model as name for now
+			"name":         deviceConfig.Model,       // Use model as name
 			"type":         deviceConfig.Type,        // From config
-			"model":        deviceInfo.Model,         // From device
+			"model":        deviceConfig.Model,       // From config (use model as device model)
 			"address":      deviceConfig.Address,     // From config
-			"status":       "online",                 // Default status
-			"capabilities": deviceConfig.Capabilities, // From config (more complete than device)
+			"status":       "unknown",                // Status unknown without network check
+			"capabilities": deviceConfig.Capabilities, // From config
 		}
 		
 		hsh.logger.Info().
 			Str("device_id", deviceConfig.ID).
 			Str("device_name", deviceConfig.Model).
 			Str("device_type", deviceConfig.Type).
-			Str("device_model", deviceInfo.Model).
+			Str("device_model", deviceConfig.Model).
 			Str("device_address", deviceConfig.Address).
 			Interface("capabilities", deviceConfig.Capabilities).
 			Msg("[DEBUG] Hub sending device data")
@@ -792,9 +506,10 @@ func (hsh *HubServiceHandler) handleListAction(req *hermes.ServiceRequest) (*her
 		Str("request_service", req.Service).
 		Msg("[DEBUG] Hub creating response with message ID from request")
 
-	return hermes.CreateServiceResponse(
+	return hermes.CreateServiceResponseWithNonce(
 		req.MessageID,
 		req.Service,
+		req.Nonce,
 		true,
 		responseData,
 		nil,
@@ -821,9 +536,10 @@ func (hsh *HubServiceHandler) handleStatusAction(req *hermes.ServiceRequest) (*h
 		"status":             "healthy",
 	}
 
-	return hermes.CreateServiceResponse(
+	return hermes.CreateServiceResponseWithNonce(
 		req.MessageID,
 		req.Service,
+		req.Nonce,
 		true,
 		statusData,
 		nil,
@@ -867,9 +583,10 @@ func (hsh *HubServiceHandler) handleInfoAction(req *hermes.ServiceRequest) (*her
 		"version":        "1.0.0",
 	}
 
-	return hermes.CreateServiceResponse(
+	return hermes.CreateServiceResponseWithNonce(
 		req.MessageID,
 		req.Service,
+		req.Nonce,
 		true,
 		infoData,
 		nil,

@@ -3,6 +3,7 @@ package hub
 import (
 	"crypto/rand"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -239,7 +240,7 @@ func (nc *NonceCache) Shutdown() {
 	nc.deviceCaches = make(map[string]*lru.Cache[string, *NonceResponse])
 }
 
-// ValidateNonce validates the format of a nonce (basic validation)
+// ValidateNonce validates the format of a simple nonce (timestamp-hex)
 func ValidateNonce(nonce string) bool {
 	if nonce == "" {
 		return false
@@ -251,17 +252,38 @@ func ValidateNonce(nonce string) bool {
 		return false
 	}
 	
-	// Check for dash separator
-	dashIndex := -1
-	for i, c := range nonce {
-		if c == '-' {
-			dashIndex = i
-			break
+	// Must contain exactly one dash separator
+	dashCount := strings.Count(nonce, "-")
+	if dashCount != 1 {
+		return false
+	}
+	
+	// Find dash position
+	dashIndex := strings.Index(nonce, "-")
+	if dashIndex <= 0 || dashIndex >= len(nonce)-1 {
+		return false
+	}
+	
+	// Timestamp part should be numeric
+	timestampPart := nonce[:dashIndex]
+	if len(timestampPart) < 13 { // Unix timestamp in milliseconds is 13+ digits
+		return false
+	}
+	for _, c := range timestampPart {
+		if c < '0' || c > '9' {
+			return false
 		}
 	}
 	
-	if dashIndex <= 0 || dashIndex >= len(nonce)-1 {
+	// Random part should be 8-character hex
+	randomPart := nonce[dashIndex+1:]
+	if len(randomPart) != 8 {
 		return false
+	}
+	for _, c := range randomPart {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
 	}
 	
 	return true

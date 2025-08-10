@@ -2,6 +2,9 @@
   import { onMount } from 'svelte';
   import { auth, apiClient } from '../lib/auth';
 
+  // Props
+  export let onSelectDevice: (device: any) => void = () => {};
+
   $: authState = $auth;
   $: user = authState.user;
   
@@ -121,19 +124,23 @@
                 {/if}
                 
                 <div class="device-actions">
+                  <button class="remote-btn" on:click={() => onSelectDevice(device)}>
+                    Remote Control
+                  </button>
+                  
                   {#if device.device_type === 'tv'}
-                    <button on:click={() => sendDeviceAction(device.device_id, { type: 'power', action: 'toggle' })}>
+                    <button on:click={() => sendDeviceAction(device.device_id, { type: 'remote', action: 'power' })}>
                       Power Toggle
                     </button>
-                    <button on:click={() => sendDeviceAction(device.device_id, { type: 'volume', action: 'up' })}>
+                    <button on:click={() => sendDeviceAction(device.device_id, { type: 'remote', action: 'volume_up' })}>
                       Volume Up
                     </button>
-                    <button on:click={() => sendDeviceAction(device.device_id, { type: 'volume', action: 'down' })}>
+                    <button on:click={() => sendDeviceAction(device.device_id, { type: 'remote', action: 'volume_down' })}>
                       Volume Down
                     </button>
                   {:else}
-                    <button on:click={() => sendDeviceAction(device.device_id, { type: 'generic', action: 'status' })}>
-                      Get Status
+                    <button on:click={() => sendDeviceAction(device.device_id, { type: 'remote', action: 'power' })}>
+                      Power
                     </button>
                   {/if}
                 </div>
@@ -242,6 +249,15 @@
 
   .device-actions button:hover {
     background: #1976D2;
+  }
+
+  .remote-btn {
+    background: #9C27B0 !important;
+    font-weight: bold;
+  }
+
+  .remote-btn:hover {
+    background: #7B1FA2 !important;
   }
 
   .empty-state {

@@ -5,11 +5,11 @@
     import LoginForm from './components/LoginForm.svelte';
     import RegisterForm from './components/RegisterForm.svelte';
     import Dashboard from './components/Dashboard.svelte';
-    import Hubs from './components/Hubs.svelte';
+    import RemoteControl from './components/RemoteControl.svelte';
 
     // Types
     type AuthView = 'login' | 'register';
-    type MainView = 'dashboard' | 'hubs' | 'devices' | 'settings';
+    type MainView = 'dashboard' | 'settings' | 'remote';
 
     // Gateway status state
     let gatewayStatus: any = null;
@@ -28,6 +28,9 @@
     // User data
     let userHubCount = 0;
     let userDeviceCount = 0;
+    let devices: any[] = [];
+    let hubs: any[] = [];
+    let selectedDevice: any = null;
 
     // Version numbering - YY.WW.N format
     function generateVersion(): string {
@@ -72,8 +75,10 @@
                 apiClient.getUserDevices(authState.token)
             ]);
             
-            userHubCount = hubsResponse.count || 0;
-            userDeviceCount = devicesResponse.count || 0;
+            hubs = hubsResponse.hubs || [];
+            devices = devicesResponse.devices || [];
+            userHubCount = hubs.length;
+            userDeviceCount = devices.length;
         } catch (err) {
             console.error('Failed to fetch user data:', err);
         }
@@ -91,6 +96,18 @@
     function handleLogout() {
         auth.logout();
         currentAuthView = 'login';
+        currentMainView = 'dashboard';
+        selectedDevice = null;
+    }
+
+    // Device selection functions
+    function selectDevice(device: any) {
+        selectedDevice = device;
+        currentMainView = 'remote';
+    }
+
+    function goBackToDashboard() {
+        selectedDevice = null;
         currentMainView = 'dashboard';
     }
 
@@ -130,24 +147,6 @@
             <li>
                 <button 
                     class="nav-item"
-                    class:active={currentMainView === 'hubs'}
-                    on:click={() => setMainView('hubs')}
-                >
-                    Hubs
-                </button>
-            </li>
-            <li>
-                <button 
-                    class="nav-item"
-                    class:active={currentMainView === 'devices'}
-                    on:click={() => setMainView('devices')}
-                >
-                    Devices
-                </button>
-            </li>
-            <li>
-                <button 
-                    class="nav-item"
                     class:active={currentMainView === 'settings'}
                     on:click={() => setMainView('settings')}
                 >
@@ -162,6 +161,29 @@
                 <div class="user-stats">
                     <p><strong>Your Hubs:</strong> {userHubCount}</p>
                     <p><strong>Your Devices:</strong> {userDeviceCount}</p>
+                </div>
+                <hr />
+            {/if}
+
+            {#if isAuthenticated && devices.length > 0}
+                <div class="device-list">
+                    <h3>Devices</h3>
+                    {#each hubs as hub}
+                        {#if devices.some(device => device.hub_id === hub.hub_id)}
+                            <div class="hub-group">
+                                <h4>{hub.name || hub.hub_id}</h4>
+                                {#each devices.filter(device => device.hub_id === hub.hub_id) as device}
+                                    <button 
+                                        class="device-item"
+                                        class:selected={selectedDevice?.device_id === device.device_id}
+                                        on:click={() => selectDevice(device)}
+                                    >
+                                        {device.name || device.device_id}
+                                    </button>
+                                {/each}
+                            </div>
+                        {/if}
+                    {/each}
                 </div>
                 <hr />
             {/if}
@@ -210,14 +232,14 @@
         {:else}
             <div class="main-content">
                 {#if currentMainView === 'dashboard'}
-                    <Dashboard />
-                {:else if currentMainView === 'hubs'}
-                    <Hubs />
-                {:else if currentMainView === 'devices'}
-                    <div class="view-placeholder">
-                        <h2>Devices Control</h2>
-                        <p>Your devices: {userDeviceCount}</p>
-                        <p>Devices component will be implemented here</p>
+                    <Dashboard onSelectDevice={selectDevice} />
+                {:else if currentMainView === 'remote' && selectedDevice}
+                    <div class="remote-view">
+                        <div class="remote-header">
+                            <button class="back-btn" on:click={goBackToDashboard}>← Back</button>
+                            <h2>{selectedDevice.name || selectedDevice.device_id} Remote</h2>
+                        </div>
+                        <RemoteControl device={selectedDevice} />
                     </div>
                 {:else if currentMainView === 'settings'}
                     <div class="view-placeholder">
@@ -385,6 +407,53 @@
           padding: 0.25rem 0.5rem;
         }
       }
+      
+      .device-list {
+        margin-top: 0.5rem;
+        
+        h3 {
+          font-size: 1rem;
+          margin: 0 0 0.5rem 0;
+          text-align: center;
+          color: #333;
+        }
+        
+        .hub-group {
+          margin-bottom: 1rem;
+          
+          h4 {
+            font-size: 0.85rem;
+            margin: 0 0 0.25rem 0;
+            color: #555;
+            font-weight: bold;
+          }
+          
+          .device-item {
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            background: rgba(95, 158, 250, 0.05);
+            border: 1px solid rgba(95, 158, 250, 0.2);
+            text-align: left;
+            font-size: 0.8rem;
+            cursor: pointer;
+            border-radius: 0.25rem;
+            margin-bottom: 0.25rem;
+            transition: all 0.2s;
+            color: #333;
+            
+            &:hover {
+              background: rgba(95, 158, 250, 0.1);
+              border-color: rgba(95, 158, 250, 0.3);
+            }
+            
+            &.selected {
+              background: #5f9efa;
+              color: white;
+              border-color: #4a8bc2;
+            }
+          }
+        }
+      }
     }
     section.content {
       flex: 1;
@@ -457,6 +526,37 @@
             margin: 0.5rem 0;
           }
         }
+      }
+      
+      .remote-view {
+        height: 100%;
+        
+        .remote-header {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+          margin-bottom: 2rem;
+          
+          .back-btn {
+            background: #5f9efa;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-size: 1rem;
+            
+            &:hover {
+              background: #4a8bc2;
+            }
+          }
+          
+          h2 {
+            color: #333;
+            margin: 0;
+          }
+        }
+        
       }
     }
   }

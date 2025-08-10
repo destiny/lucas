@@ -1,6 +1,7 @@
 package hermes
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -130,9 +131,49 @@ func CreateServiceResponse(messageID, service string, success bool, data interfa
 	return resp
 }
 
+// CreateServiceResponseWithNonce creates a new ServiceResponse with nonce support
+func CreateServiceResponseWithNonce(messageID, service, nonce string, success bool, data interface{}, err error) *ServiceResponse {
+	resp := &ServiceResponse{
+		MessageID: messageID,
+		Service:   service,
+		Success:   success,
+		Data:      data,
+		Nonce:     nonce,
+	}
+	
+	if err != nil {
+		resp.Error = err.Error()
+	}
+	
+	return resp
+}
+
 // GenerateMessageID generates a unique message ID
 func GenerateMessageID() string {
 	return fmt.Sprintf("msg_%d", time.Now().UnixNano())
+}
+
+// GenerateNonce generates a simple unique nonce for request deduplication
+// Format: <timestamp_ms>-<random_hex>
+func GenerateNonce() string {
+	// Get current timestamp in milliseconds
+	timestamp := time.Now().UnixMilli()
+	
+	// Generate 4 random bytes
+	randomBytes := make([]byte, 4)
+	if _, err := rand.Read(randomBytes); err != nil {
+		// Fallback to pseudo-random if crypto/rand fails
+		timestamp += int64(time.Now().Nanosecond() % 1000000)
+		randomBytes = []byte{
+			byte(timestamp >> 24),
+			byte(timestamp >> 16),
+			byte(timestamp >> 8),
+			byte(timestamp),
+		}
+	}
+	
+	// Format: timestamp_ms-random_hex (simple and short)
+	return fmt.Sprintf("%d-%x", timestamp, randomBytes)
 }
 
 // ValidateMessage validates a Hermes message
