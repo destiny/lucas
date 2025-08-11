@@ -1,0 +1,495 @@
+# Lucas Smart Home Control System - Knowledge Base
+# Ultra-compact reference for system architecture, protocols, and data formats
+
+meta:
+  system: lucas-smart-home
+  version: "25.6.2"
+  purpose: "Simple home automation proxy for secure external access"
+  origin: "TV remote control client evolved into household device gateway"
+  components: [gateway, hub, web-ui]
+  libraries: [hermes-messaging]
+  languages: [go, typescript, svelte]
+  databases: [sqlite]
+  protocols: [hermes-zmq, http-rest]
+  
+# Application Purpose
+purpose:
+  problem: "Household devices (TVs, etc) shouldn't be directly exposed to internet"
+  solution: "Gateway acts as secure proxy/tunnel to home devices"
+  origin_story: |
+    1. Started as simple TV remote control client for Sony Bravia
+    2. Built hub to normalize device control interface
+    3. Added gateway for secure external access without device exposure
+    4. Result: One secure endpoint instead of many device endpoints
+  scale: "Small household application, not enterprise service mesh"
+
+# System Architecture
+topology: |
+  graph TD
+    U[User] --> W[Web UI :3000]
+    W --> |HTTP REST| G[Gateway :8080]
+    G --> |ZMQ :5555| H1[Hub Daemon]
+    G --> |ZMQ :5555| H2[Hub Daemon N]
+    H1 --> D1[Bravia TV]
+    H1 --> D2[Device N]
+    G --> DB[(SQLite DB)]
+    G --> WD[Web Dist]
+    
+    subgraph Gateway Services
+      G --> API[Web API]
+      G --> AUTH[Auth]
+      G --> BROKER[Message Broker]
+      G --> DATABASE[Database]
+    end
+
+# Component Details
+components:
+  gateway:
+    port: 8080
+    services: [web-api, auth, broker-service, database]
+    files: [internal/gateway/*]
+    config: gateway_keys.yml
+    
+  hub: 
+    services: [daemon, device-manager, worker-service]
+    files: [internal/hub/*, cmd/hub.go]
+    config: hub.yml
+    
+  web-ui:
+    tech: [svelte@5.38.0, typescript, vite]
+    files: [web/src/*]
+    build: web/dist/
+    bundle_size: "121KB JS (41KB gzipped), 21KB CSS (3.8KB gzipped)"
+    architecture: "Performance-first with custom components for optimal bundle size"
+    
+
+# Nonce-Based Request Deduplication
+nonce_system:
+  purpose: "Simple deduplication to prevent duplicate device commands"
+  definition: "Short, unique identifier to detect duplicate requests - NOT for correlation tracking"
+  format: "<timestamp_ms>-<random_hex>"
+  examples:
+    - "1691234567890-a1b2c3d4"
+    - "1691234567891-f5e6d7c8"
+  components:
+    timestamp_ms: "Unix timestamp in milliseconds for temporal uniqueness"
+    random_hex: "4-byte random component as 8-character hexadecimal string"
+  validation_rules:
+    - "Must contain exactly 1 dash separator"
+    - "Timestamp part must be numeric (13+ digits)"
+    - "Random part must be 8-character hex string [0-9a-f]"
+    - "Total length typically 22 characters"
+  flow: |
+    1. Gateway generates simple nonce: timestamp-random
+    2. Hub checks device-specific nonce cache for duplicates
+    3. If duplicate: return cached response (idempotent)
+    4. If new: execute command, cache response with nonce key
+    5. Hub echoes nonce back in response for client correlation
+  cache: "50 nonces per device, 1 hour expiration, keyed by nonce string"
+  usage_principles:
+    - "Keep it simple: nonces are just deduplication keys"
+    - "No correlation data: use message_id for request tracking"
+    - "No context encoding: hub_id/device_id not in nonce"
+    - "Short and efficient: minimize bandwidth and storage"
+
+# Jargon - ID Formats and Data Specifications
+# CRITICAL: This section prevents protocol confusion and repeated fixes
+jargon:
+  purpose: "Master reference for all identifier formats, keys, and data structures"
+  
+  database_ids:
+    description: "SQLite auto-increment integer primary keys for internal referencing"
+    user_id: 
+      type: "INTEGER PRIMARY KEY"
+      example: "123"
+      usage: "Internal user reference, JWT claims, database joins"
+    hub_db_id:
+      type: "INTEGER PRIMARY KEY" 
+      example: "456"
+      usage: "Internal hub reference, database foreign keys (hubs.id)"
+    device_db_id:
+      type: "INTEGER PRIMARY KEY"
+      example: "789"
+      usage: "Internal device reference, database foreign keys (devices.id)"
+
+  business_ids:
+    description: "User-facing identifiers for entities in business logic"
+    hub_id:
+      type: "UUID string with hub_ prefix"
+      format: "hub_<uuid>"
+      example: "hub_ec8ad6e1-1d4c-46b8-b872-9df4e257ffff"
+      usage: "Hub identification, worker identity, API responses, config files"
+      source: "Generated during hub setup, stored in hub.yml config"
+    device_id:
+      type: "String identifier"
+      format: "lowercase_with_underscores"
+      example: "living_room_tv"
+      usage: "Device identification, API endpoints, device commands"
+      source: "Defined in hub.yml device config, user-friendly names"
+    username:
+      type: "String"
+      format: "alphanumeric"
+      example: "admin"
+      usage: "User authentication, no separate business ID"
+
+  messaging_ids:
+    description: "Protocol identifiers for message routing and correlation"
+    message_id:
+      type: "String with msg_ prefix"
+      format: "msg_<timestamp_nanoseconds>"
+      example: "msg_1754755982784833000"
+      usage: "Request-response correlation, timeout tracking"
+      source: "Generated by hermes.GenerateMessageID()"
+      lifetime: "Request duration only (30s timeout)"
+    client_id:
+      type: "String identifier for ZMQ client connections"
+      formats:
+        gateway_persistent: "gateway_main"
+        gateway_legacy: "gateway_<timestamp_nanoseconds>"
+        gateway_immediate: "gateway_immediate"
+        hub_worker: "<hub_id>"
+      examples:
+        - "gateway_main"
+        - "gateway_1754756009823031000" 
+        - "gateway_immediate"
+        - "hub_ec8ad6e1-1d4c-46b8-b872-9df4e257ffff"
+      usage: "ZMQ ROUTER socket routing, response delivery"
+      problem: "Multiple gateway clients cause response routing conflicts"
+    worker_identity:
+      type: "String identifier for Hermes workers"
+      format: "Same as hub_id"
+      example: "hub_ec8ad6e1-1d4c-46b8-b872-9df4e257ffff"
+      usage: "Worker registration, service discovery, request routing"
+    service_name:
+      type: "String service identifier"
+      format: "namespace.action"
+      examples:
+        - "hub.control"
+        - "device.bravia"
+      usage: "Service routing, worker registration"
+
+  nonce_format:
+    type: "String deduplication key"
+    format: "<timestamp_ms>-<random_hex>"
+    example: "1691234567890-a1b2c3d4"
+    components:
+      timestamp_ms: "Unix timestamp in milliseconds (13+ digits)"
+      separator: "Single dash character"
+      random_hex: "4 random bytes as 8-character hex string"
+    validation: "See nonce_system section above"
+    usage: "Request deduplication only, NOT for correlation"
+
+  key_formats:
+    description: "Cryptographic and authentication key formats"
+    jwt_token:
+      type: "JSON Web Token"
+      format: "Bearer <jwt_string>"
+      example: "Bearer eyJhbGciOiJIUzI1NiIs..."
+      usage: "API authentication, user identification"
+    hub_keys:
+      public_key: "Base64 encoded public key"
+      private_key: "Base64 encoded private key"
+      product_key: "UUID string"
+      usage: "Hub authentication, secure communication"
+
+  protocol_conflicts:
+    description: "Current issues causing repeated protocol fixes"
+    multiple_gateway_clients:
+      problem: "BrokerService creates new client for each request"
+      formats: ["gateway_immediate", "gateway_<timestamp>"]
+      consequence: "Message ID mismatches, response routing failures"
+      solution: "Use single persistent gateway client"
+    inconsistent_naming:
+      problem: "hub_id vs hubID vs hub.ID confusion"
+      consequence: "Database query failures, API inconsistencies" 
+      solution: "Standardize on snake_case for all identifiers"
+
+# Health Check System
+health_checks:
+  purpose: "Monitor actual connectivity and component health, not just internal state"
+  requirements:
+    gateway_health: "Must test real database and broker connectivity, not just report 'healthy'"
+    hub_health: "Must test actual gateway reachability, not just socket state"
+    connectivity_test: "Perform active probing to detect network failures"
+  hub_health_check:
+    current_problem: "Hub reports healthy when gateway is unreachable"
+    required_fix: "Test actual gateway connectivity, not just worker state"
+    method: "Send periodic test requests to gateway or ping gateway health endpoint"
+    frequency: "Every 60 seconds with failure detection"
+  principles:
+    - "Health checks must reflect real operational status"
+    - "Don't rely on internal state flags alone"
+    - "Test end-to-end connectivity, not just socket existence"
+    - "Fail fast when dependencies are unreachable"
+
+# Communication Protocols
+protocols:
+  hermes:
+    description: "Simple messaging proxy (NOT service discovery)"
+    transport: zmq-router-dealer
+    purpose: "Secure tunnel between gateway and hub, not service mesh"
+    roles:
+      broker: "Gateway runs proxy broker internally"
+      client: "Gateway sends device commands through proxy"
+      worker: "Hub receives commands and controls local devices"
+    messages:
+      - READY: hub connects and registers as worker
+      - REQUEST: gateway forwards device commands to hub
+      - REPLY: hub returns command results to gateway
+      - HEARTBEAT: hub liveness check
+      - DISCONNECT: graceful hub shutdown
+    constants:
+      HERMES_CLIENT: "HERMES01"
+      HERMES_WORKER: "HERMESW01"
+    
+  rest-api:
+    base: "/api/v1"
+    auth: jwt-bearer-token
+    endpoints:
+      "/auth/login": "POST - user login"
+      "/auth/register": "POST - user registration"
+      "/devices": "GET - list user devices"
+      "/devices/{id}/action": "POST - send device command"
+      "/hubs": "GET - list user hubs"
+      "/gateway/status": "GET - gateway health"
+      "/hub/register": "POST - hub first time only, register and exchange public key"
+
+# Data Schemas
+schemas:
+  service_request: |
+    {
+      "message_id": "string",
+      "service": "string", 
+      "action": "string",
+      "payload": "json",
+      "nonce": "string?"  # For request deduplication
+    }
+    
+  service_response: |
+    {
+      "message_id": "string",
+      "service": "string",
+      "success": "boolean",
+      "data": "any",
+      "error": "string?",
+      "nonce": "string?"  # Echo back request nonce
+    }
+    
+  device_action: |
+    {
+      "device_id": "string",
+      "action": {
+        "type": "power|volume|channel|input",
+        "value": "any"
+      }
+    }
+    
+  hub_device_info: |
+    {
+      "id": "string", # unique per hub, used for routing
+      "type": "string", 
+      "name": "string", # user-friendly name for selection
+      "model": "string",
+      "capabilities": ["string"],
+      "status": "online|offline"
+      # address: optional, for reference only, not used in actions
+    }
+
+# Database Schema
+database:
+  users: [id, username, email, password_hash, last_login, created_at]
+  hubs: [id, user_id, hub_id, name, public_key, product_key, status, auto_registered, last_seen, created_at]
+  devices: [id, hub_id, device_id, device_type, name, model, capabilities, status, created_at]
+
+# Configuration Files
+config:
+  hub.yml: |
+    gateway: {endpoint, public_key}
+    hub: {id, public_key, private_key, product_key}  
+    devices: [{id, type, model, address, credential, capabilities}]
+    
+  gateway_keys.yml: |
+    server: {public_key, private_key}
+
+# Key Operations Flow
+flows:
+  user_device_action: |
+    sequenceDiagram
+      User->>Web: Click device by name
+      Web->>Gateway: POST /devices/{id}/action + JWT
+      Gateway->>Gateway: Validate JWT → user_id
+      Gateway->>DB: Find device → hub_id
+      Gateway->>Gateway: Prepare action payload
+      Gateway-->>Web: HTTP 200 (immediate response)
+      Gateway->>Gateway: Internal client to Majordomo broker
+      Gateway->>Hub: ZMQ ServiceRequest via Hermes
+      Hub->>Device: Device-specific command
+      Hub->>Hub: Process result (device response optional)
+      Hub->>Gateway: ZMQ ServiceResponse (success/error)
+      Note over Hub,Device: Some devices fire-and-forget, no response
+      
+  hub_one_time_registration: |
+    sequenceDiagram
+      Hub->>Hub: Check gateway_public_key in config
+      Note over Hub: If missing/placeholder → ONE-TIME setup only
+      Hub->>Gateway: HTTP POST /hub/register (hub_id, public_key, product_key)
+      Gateway->>DB: Store hub registration info
+      Gateway->>Hub: HTTP response with gateway_public_key
+      Hub->>Hub: Save gateway_public_key to config file
+      Note over Hub: One-time registration complete
+      
+  hub_login_process: |
+    sequenceDiagram
+      Note over Hub: Normal startup process (every hub start)
+      Hub->>Hub: Start ZMQ worker service
+      Hub->>Gateway: Establish ZMQ connection :5555
+      Hub->>Gateway: HERMES_READY(hub.control) - Login
+      Gateway->>Hub: Device list request (handshake)
+      Hub->>Gateway: Device list response with all devices
+      Gateway->>DB: Store/update devices + set hub online
+      Gateway->>Gateway: Auto-grant new devices to hub owner
+      Note over Hub,Gateway: Hub online + devices inherit user ownership
+
+# Critical Files
+files:
+  core:
+    - internal/gateway/broker_service.go  # Message routing
+    - internal/hermes/broker.go          # ZMQ broker
+    - internal/hub/daemon.go             # Hub main logic
+    - web/src/App.svelte                 # Web UI main
+    
+  config:
+    - hub.yml                            # Hub configuration
+    - gateway_keys.yml                   # Crypto keys
+    
+# Hub Registration & Operation
+hub_processes:
+  one_time_registration:
+    purpose: "Establish trust between hub and gateway (security)"
+    trigger: "Hub startup checks gateway_public_key in config"
+    condition: "If missing/placeholder → perform ONE-TIME setup"
+    method: "HTTP only - try common gateway URLs"
+    urls: ["http://localhost:8080", "http://gateway:8080", "http://gateway.local:8080"]
+    payload: {hub_id, public_key, name, product_key}
+    validation: "40-char CurveZMQ public key required"
+    result: "Secure key exchange, save to config file"
+    endpoint: "HTTP POST /hub/register"
+    
+  hub_connection:
+    purpose: "Establish secure tunnel to gateway (operation)"
+    trigger: "Every hub startup (normal operation)"
+    condition: "After registration is complete"
+    method: "ZMQ encrypted connection + device list sync"
+    process: "Connect → READY → Device list → Accept commands"
+    endpoint: "ZMQ tcp://localhost:5555"
+    
+# Hub Ownership (User Access Control)
+hub_claiming:
+  purpose: "Link physical hub in household to user account"
+  method: "User provides product_key to claim registered hub"
+  endpoint: "POST /user/hubs/claim (JWT protected)"
+  validation: "Hub must be registered, not claimed by other user"
+  auto_registered: "Can reclaim hubs auto-registered by system"
+  security_benefit: "Prevents unauthorized access to household devices"
+  immediate_effects:
+    - "Hub ownership transferred to user account"
+    - "All existing devices on hub automatically granted to user"
+    - "Device ownership updated in database (claimed status)"
+  future_effects:
+    - "New devices discovered by hub auto-granted to hub owner"
+    - "Device list updates automatically inherit user ownership"
+    - "No manual device claiming required after hub claim"
+
+# Device Types
+devices:
+  bravia:
+    type: Sony TV
+    protocol: IRCC + JSON-RPC
+    capabilities: [remote_control, system_control, audio_control, content_control]
+    remote_actions: [power, power_on, power_off, volume_up, volume_down, mute, channel_up, channel_down, up, down, left, right, confirm, home, menu, back, input, hdmi1, hdmi2, hdmi3, hdmi4]
+    control_actions: [power_status, system_info, volume_info, playing_content, app_list, content_list, set_volume, set_mute]
+    
+# Simple Proxy Pattern (NOT Services)
+proxy_pattern:
+  hub_worker: "hub.control" # Hub registers as single worker
+  device_routing: "Commands routed by device_id, not service discovery"
+  no_services: "No dynamic service registration - just device types in config"
+  examples: "TV control, not separate device.bravia service"
+    
+# Authentication
+auth:
+  method: JWT tokens
+  storage: local storage (web) + API keys (hub)
+  flow: login -> jwt -> api calls with Bearer token
+
+# UI Framework Strategy
+ui_framework:
+  performance_strategy: "Custom components for optimal performance and minimal bundle size"
+  web_core_vitals:
+    cls_optimization: "Custom toast notifications eliminate layout shifts from feedback divs"
+    fcp_lcp: "Lightweight component architecture with minimal dependencies"
+    inp: "Touch-friendly controls with 44px minimum touch targets"
+  component_architecture: |
+    RemoteControl.svelte: Custom performance-optimized remote interface with custom toast
+    ControlGroup.svelte: Reusable button groups (custom)
+    Toast notifications: Custom toast component for non-blocking feedback
+  responsive_design: "Mobile-first with progressive disclosure (essential vs advanced controls)"
+  bundle_optimization: "121KB JS (vs 316KB with Flowbite) - 62% reduction in bundle size"
+  sass_config: "Modern compiler API configured to eliminate deprecation warnings"
+  svelte5_migration: "Successfully migrated to Svelte 5 with proper mount() API and compatible reactive patterns"
+  migration_details: |
+    - Updated main.ts: new App() → mount(App, { target })
+    - App.svelte: Clean reactive statements with $auth store integration  
+    - RemoteControl.svelte: Proper $: reactive patterns for Svelte 5
+    - All components: Compatible with both Svelte 4 and 5 reactive syntax
+    - Performance: Maintained 122KB JS bundle (41KB gzipped)
+
+# Extension Points  
+extensibility:
+  new_devices: "Add to internal/device/ + update hub config"
+  new_protocols: "Implement Device interface for new device types" 
+  new_hubs: "Deploy additional hub instances with unique IDs"
+  web_components: "Add Svelte components + routes (use Flowbite for common UI patterns)"
+  security: "Gateway handles auth/encryption, devices stay internal"
+
+# Deployment
+deployment:
+  gateway: "Single binary + SQLite + web dist (public/cloud)"
+  hub: "Single binary + YAML config (household/private network)"
+  architecture: "Simple proxy - 1 gateway : N household hubs : M local devices"
+  security_model: "Gateway exposed to internet, hubs stay internal"
+  typical_setup: "Gateway on VPS, hubs on home networks"
+  
+# Common Issues
+troubleshooting:
+  service_not_available: |
+    Error: "service error: service not available: device.bravia"
+    Real_Cause: Hub not connected to gateway (connectivity issue)
+    NOT: Service discovery failure (no such thing in Lucas)
+    Check: 1) Hub ZMQ connection status, 2) Hub registered as worker
+           3) Device exists in hub config, 4) Gateway broker running
+    Solution: Verify hub-gateway connection, not service registration
+
+  json_parsing_errors: |
+    Error: "failed to parse service response: unexpected end of JSON input"
+    Real_Cause: Hub not responding or sending empty/malformed responses
+    Check: 1) Hub logs for device command processing errors
+           2) Device connectivity from hub
+           3) Response validation in gateway logs
+    Solution: Verify hub can reach device, check device driver errors
+
+  message_id_mismatches: |
+    Error: "Received response for unknown request message_id=..."
+    Real_Cause: Message ID correlation issues between request/response
+    Check: 1) Client timeout vs hub response time
+           2) Multiple clients with same identity
+           3) Hub response contains correct message_id from request
+    Solution: Increase client timeout, verify unique client identities, check hub response formatting
+
+  request_timeouts: |
+    Error: "Request timeout message_id=... service=hub.control timeout=30000"
+    Real_Cause: Hub not responding within timeout period
+    Check: 1) Hub processing time for device commands
+           2) Device response delays (some devices are slow)
+           3) Network latency between gateway and hub
+    Solution: Increase timeout, optimize device drivers, check network connectivity

@@ -91,7 +91,7 @@ func (c *BraviaClient) RemoteRequest(code BraviaRemoteCode) error {
 	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)
 	duration := time.Since(startTime)
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to send IRCC request: %w", err)
 	}
@@ -118,7 +118,7 @@ func (c *BraviaClient) ControlRequest(endpoint BraviaEndpoint, payload BraviaPay
 			Str("method", payload.Method).
 			Str("address", c.address).
 			Msg("Test mode: Control request simulated")
-		
+
 		// Create a mock response for test mode
 		mockResp := &http.Response{
 			StatusCode: http.StatusOK,
@@ -155,7 +155,7 @@ func (c *BraviaClient) ControlRequest(endpoint BraviaEndpoint, payload BraviaPay
 	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)
 	duration := time.Since(startTime)
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to send control request: %w", err)
 	}

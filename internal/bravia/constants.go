@@ -25,10 +25,10 @@ const (
 
 	// Menu Controls
 	Home    BraviaRemoteCode = "AAAAAQAAAAEAAABgAw=="
-	Menu    BraviaRemoteCode = "AAAAAQAAAAEAAAAbAw=="
+	Menu    BraviaRemoteCode = "AAAAAQAAAAEAAAAbAw==" // Require to update that is not work
 	Options BraviaRemoteCode = "AAAAAgAAAAEAAAA2Aw=="
-	Return  BraviaRemoteCode = "AAAAAgAAAAEAAAAjAw=="
-	Back    BraviaRemoteCode = "AAAAAgAAAAEAAAAjAw=="
+	Return  BraviaRemoteCode = "AAAAAgAAAJcAAAAjAw=="
+	Back    BraviaRemoteCode = "AAAAAQAAAAEAAABjAw=="
 
 	// Input Controls
 	Input BraviaRemoteCode = "AAAAAQAAAAEAAAAlAw=="
