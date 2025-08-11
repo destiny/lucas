@@ -95,6 +95,8 @@ _cgo_export.*
 /pkg/
 /bin/
 
+dist
+web-dist
 gateway.db
 gateway_keys.yml
 hub.yml
