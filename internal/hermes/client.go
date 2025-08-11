@@ -163,7 +163,7 @@ func (c *HermesClient) connect() error {
 		return fmt.Errorf("failed to set linger: %w", err)
 	}
 
-	if err = socket.SetRcvtimeo(1 * time.Second); err != nil {
+	if err = socket.SetRcvtimeo(5 * time.Second); err != nil {
 		socket.Close()
 		return fmt.Errorf("failed to set receive timeout: %w", err)
 	}
@@ -193,12 +193,13 @@ func (c *HermesClient) Request(service string, body []byte) ([]byte, error) {
 func (c *HermesClient) RequestWithTimeout(service string, body []byte, timeout time.Duration) ([]byte, error) {
 	messageID := GenerateMessageID()
 	
-	c.logger.Debug().
+	c.logger.Info().
 		Str("service", service).
 		Str("message_id", messageID).
 		Int("body_size", len(body)).
 		Dur("timeout", timeout).
-		Msg("Sending request to service")
+		Int("pending_requests", len(c.pending)).
+		Msg("[HUB_DEBUG] Sending request to service")
 
 	// Create pending request
 	pending := &PendingClientRequest{
@@ -240,12 +241,13 @@ func (c *HermesClient) RequestWithTimeout(service string, body []byte, timeout t
 			latency := time.Since(pending.Timestamp)
 			c.recordLatency(latency)
 			
-			c.logger.Debug().
+			c.logger.Info().
 				Str("service", service).
 				Str("message_id", messageID).
 				Dur("latency", latency).
 				Int("response_size", len(response)).
-				Msg("Received response")
+				Int("attempt", attempt).
+				Msg("[HUB_DEBUG] Received successful response")
 			
 			// Clean up pending request
 			c.mutex.Lock()
@@ -490,14 +492,22 @@ func (c *HermesClient) messageLoop() {
 				continue
 			}
 
-			// Receive message from broker
-			msg, err := c.socket.RecvMessageBytes(0)
+			// Receive message from broker (non-blocking)
+			msg, err := c.socket.RecvMessageBytes(zmq4.DONTWAIT)
 			if err != nil {
-				if err.Error() != "resource temporarily unavailable" {
-					c.logger.Error().Err(err).Msg("Failed to receive message from broker")
+				if err.Error() == "resource temporarily unavailable" {
+					// No message available - sleep briefly to prevent busy waiting
+					time.Sleep(10 * time.Millisecond)
+					continue
+				} else {
+					c.logger.Error().Err(err).Msg("[HUB_DEBUG] Failed to receive message from broker")
 				}
 				continue
 			}
+
+			c.logger.Debug().
+				Int("message_parts", len(msg)).
+				Msg("[HUB_DEBUG] Client received message from broker")
 
 			if len(msg) < 2 {
 				c.logger.Warn().

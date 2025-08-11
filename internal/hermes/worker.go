@@ -223,11 +223,11 @@ func (w *HermesWorker) messageLoop() {
 				continue
 			}
 
-			// Receive message from broker
-			msg, err := w.socket.RecvMessageBytes(0)
+			// Receive message from broker (non-blocking to prevent hang)
+			msg, err := w.socket.RecvMessageBytes(zmq4.DONTWAIT)
 			if err != nil {
 				if err.Error() == "resource temporarily unavailable" {
-					// Normal socket timeout - continue processing
+					// No message available - normal with non-blocking mode
 					// Don't decrement liveness here as this is expected behavior
 					w.mutex.RLock()
 					state := w.state
@@ -237,14 +237,20 @@ func (w *HermesWorker) messageLoop() {
 						continue
 					}
 					
-					// Just continue, liveness will be managed by heartbeat success/failure
+					// Small sleep to prevent busy waiting while staying responsive
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 				
-				w.logger.Error().Err(err).Msg("Failed to receive message from broker")
+				w.logger.Error().Err(err).Msg("[HUB_DEBUG] Worker failed to receive message from broker")
 				w.reconnectToBroker()
 				continue
 			}
+
+			w.logger.Debug().
+				Int("message_parts", len(msg)).
+				Str("service", w.service).
+				Msg("[HUB_DEBUG] Worker received message from broker")
 
 			if len(msg) < 2 {
 				w.logger.Warn().
@@ -325,7 +331,8 @@ func (w *HermesWorker) handleRequest(clientID string, body []byte, extraParts []
 		Str("client_id", clientID).
 		Int("request_num", requestNum).
 		Int("body_size", len(body)).
-		Msg("Processing service request")
+		Str("service", w.service).
+		Msg("[HUB_DEBUG] Worker processing service request")
 
 	// Use body from extra parts if available (for large messages)
 	requestBody := body
@@ -379,7 +386,8 @@ func (w *HermesWorker) handleRequest(clientID string, body []byte, extraParts []
 		Str("client_id", clientID).
 		Int("request_num", requestNum).
 		Int("response_size", len(response)).
-		Msg("Request processed successfully")
+		Str("service", w.service).
+		Msg("[HUB_DEBUG] Worker request processed successfully, sending reply")
 
 	return nil
 }

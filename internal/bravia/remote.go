@@ -17,7 +17,11 @@ type BraviaRemote struct {
 
 // NewBraviaRemote creates a new BraviaRemote device
 func NewBraviaRemote(address, credential string, options *internal.FnModeOptions) *BraviaRemote {
-	client := NewBraviaClient(address, credential, options)
+	var opts internal.FnModeOptions
+	if options != nil {
+		opts = *options
+	}
+	client := NewBraviaClient(address, credential, opts)
 	return &BraviaRemote{
 		client: client,
 		info: device.DeviceInfo{
