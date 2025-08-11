@@ -119,6 +119,11 @@ func (c *Config) GetDevice(id string) (*DeviceConfig, error) {
 	return nil, fmt.Errorf("device not found: %s", id)
 }
 
+// Save saves the configuration to a YAML file
+func (c *Config) Save(filepath string) error {
+	return SaveConfig(c, filepath)
+}
+
 // SaveConfig saves configuration to a YAML file
 func SaveConfig(config *Config, filepath string) error {
 	data, err := yaml.Marshal(config)

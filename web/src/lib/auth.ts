@@ -241,6 +241,23 @@ class ApiClient {
       body: JSON.stringify(action),
     });
   }
+
+  async getHubDevices(hubId: string, token: string) {
+    return this.authenticatedRequest(`/user/hubs/${hubId}/devices`, token);
+  }
+
+  async configureHubDevices(hubId: string, devices: any[], token: string) {
+    return this.authenticatedRequest(`/user/hubs/${hubId}/devices/configure`, token, {
+      method: 'POST',
+      body: JSON.stringify({ devices }),
+    });
+  }
+
+  async reloadHubDevices(hubId: string, token: string) {
+    return this.authenticatedRequest(`/user/hubs/${hubId}/devices/reload`, token, {
+      method: 'POST',
+    });
+  }
 }
 
 export const apiClient = new ApiClient();
