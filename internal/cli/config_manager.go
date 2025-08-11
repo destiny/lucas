@@ -223,7 +223,7 @@ func (cm *ConfigManager) BackupConfig() error {
 // RestoreFromBackup restores configuration from backup
 func (cm *ConfigManager) RestoreFromBackup() error {
 	backupPath := cm.configPath + ".backup"
-	
+
 	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
 		return fmt.Errorf("backup file does not exist: %s", backupPath)
 	}

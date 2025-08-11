@@ -24,15 +24,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
 	"lucas/internal/device"
 	"lucas/internal/logger"
-	"github.com/rs/zerolog"
 )
 
 // GatewayMessage represents a message from the gateway
 type GatewayMessage struct {
 	ID        string          `json:"id"`
-	Nonce     string          `json:"nonce"`     // Unique nonce for idempotency
+	Nonce     string          `json:"nonce"` // Unique nonce for idempotency
 	Timestamp string          `json:"timestamp"`
 	DeviceID  string          `json:"device_id"`
 	Action    json.RawMessage `json:"action"`
@@ -41,7 +41,7 @@ type GatewayMessage struct {
 // HubResponse represents a response from the hub to the gateway
 type HubResponse struct {
 	ID        string      `json:"id"`
-	Nonce     string      `json:"nonce"`     // Echo back the nonce
+	Nonce     string      `json:"nonce"` // Echo back the nonce
 	Timestamp string      `json:"timestamp"`
 	Success   bool        `json:"success"`
 	Data      interface{} `json:"data,omitempty"`
@@ -100,8 +100,8 @@ func NewDaemon(configPath string, debug, testMode bool) (*Daemon, error) {
 // needsRegistration checks if the hub needs to register with gateway
 // by detecting if gateway public key is still a placeholder
 func (d *Daemon) needsRegistration() bool {
-	return d.config.Gateway.PublicKey == "" || 
-		   d.config.Gateway.PublicKey == "gateway_public_key_here"
+	return d.config.Gateway.PublicKey == "" ||
+		d.config.Gateway.PublicKey == "gateway_public_key_here"
 }
 
 // autoRegister performs automatic registration with gateway using default locations
@@ -111,7 +111,7 @@ func (d *Daemon) autoRegister() error {
 	// Try common gateway URLs
 	gatewayURLs := []string{
 		"http://localhost:8080",
-		"http://127.0.0.1:8080", 
+		"http://127.0.0.1:8080",
 		"http://gateway:8080",
 		"http://gateway.local:8080",
 	}
@@ -326,7 +326,6 @@ func (d *Daemon) processDeviceAction(msg *GatewayMessage, action json.RawMessage
 	return hubResponse
 }
 
-
 // startHealthCheck starts a periodic health check routine
 func (d *Daemon) startHealthCheck() {
 	ticker := time.NewTicker(60 * time.Second) // Health check every 60 seconds for less system noise
@@ -351,7 +350,7 @@ func (d *Daemon) performHealthCheck() {
 
 	// Test actual gateway connectivity by sending a test request
 	gatewayReachable := d.testGatewayConnectivity()
-	
+
 	if gatewayReachable {
 		d.logger.Debug().Msg("Gateway connectivity OK - test request successful")
 	} else {
@@ -379,7 +378,7 @@ func (d *Daemon) testGatewayConnectivity() bool {
 		d.logger.Debug().Msg("No workers connected to gateway")
 		return false
 	}
-	
+
 	// Get recent heartbeat/connection health from worker service
 	return d.workerService.IsGatewayReachable()
 }

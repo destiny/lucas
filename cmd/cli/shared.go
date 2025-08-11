@@ -31,63 +31,63 @@ const (
 // Common styles
 var (
 	titleStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FAFAFA")).
-		Background(lipgloss.Color("#7D56F4")).
-		Padding(0, 1).
-		Bold(true)
+			Foreground(lipgloss.Color("#FAFAFA")).
+			Background(lipgloss.Color("#7D56F4")).
+			Padding(0, 1).
+			Bold(true)
 
 	subtitleStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#7D56F4")).
-		Bold(true)
+			Foreground(lipgloss.Color("#7D56F4")).
+			Bold(true)
 
 	inputStyle = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#7D56F4")).
-		Padding(0, 1).
-		Width(50)
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#7D56F4")).
+			Padding(0, 1).
+			Width(50)
 
 	inputFocusedStyle = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#FF79C6")).
-		Padding(0, 1).
-		Width(50)
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#FF79C6")).
+				Padding(0, 1).
+				Width(50)
 
 	buttonStyle = lipgloss.NewStyle().
-		Background(lipgloss.Color("#7D56F4")).
-		Foreground(lipgloss.Color("#FAFAFA")).
-		Padding(0, 2).
-		Margin(0, 1)
+			Background(lipgloss.Color("#7D56F4")).
+			Foreground(lipgloss.Color("#FAFAFA")).
+			Padding(0, 2).
+			Margin(0, 1)
 
 	buttonActiveStyle = lipgloss.NewStyle().
-		Background(lipgloss.Color("#FF79C6")).
-		Foreground(lipgloss.Color("#FAFAFA")).
-		Padding(0, 2).
-		Margin(0, 1)
+				Background(lipgloss.Color("#FF79C6")).
+				Foreground(lipgloss.Color("#FAFAFA")).
+				Padding(0, 2).
+				Margin(0, 1)
 
 	remoteButtonStyle = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(0, 1).
-		Margin(0, 1).
-		Background(lipgloss.Color("#44475A")).
-		Foreground(lipgloss.Color("#F8F8F2"))
+				Border(lipgloss.RoundedBorder()).
+				Padding(0, 1).
+				Margin(0, 1).
+				Background(lipgloss.Color("#44475A")).
+				Foreground(lipgloss.Color("#F8F8F2"))
 
 	remoteButtonActiveStyle = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(0, 1).
-		Margin(0, 1).
-		Background(lipgloss.Color("#FF79C6")).
-		Foreground(lipgloss.Color("#FAFAFA"))
+				Border(lipgloss.RoundedBorder()).
+				Padding(0, 1).
+				Margin(0, 1).
+				Background(lipgloss.Color("#FF79C6")).
+				Foreground(lipgloss.Color("#FAFAFA"))
 
 	errorStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FF5555")).
-		Bold(true)
+			Foreground(lipgloss.Color("#FF5555")).
+			Bold(true)
 
 	successStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#50FA7B")).
-		Bold(true)
+			Foreground(lipgloss.Color("#50FA7B")).
+			Bold(true)
 
 	helpStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#6272A4"))
+			Foreground(lipgloss.Color("#6272A4"))
 )
 
 // Remote button types
@@ -182,11 +182,4 @@ func renderTextWithCursor(text string, cursorPos int, showCursor bool) string {
 
 		return before + highlightedChar + after
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

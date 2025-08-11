@@ -120,7 +120,7 @@ func CreateServiceRequest(service, action string, payload interface{}) (*Service
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
-	
+
 	return &ServiceRequest{
 		MessageID: GenerateMessageID(),
 		Service:   service,
@@ -137,11 +137,11 @@ func CreateServiceResponse(messageID, service string, success bool, data interfa
 		Success:   success,
 		Data:      data,
 	}
-	
+
 	if err != nil {
 		resp.Error = err.Error()
 	}
-	
+
 	return resp
 }
 
@@ -154,11 +154,11 @@ func CreateServiceResponseWithNonce(messageID, service, nonce string, success bo
 		Data:      data,
 		Nonce:     nonce,
 	}
-	
+
 	if err != nil {
 		resp.Error = err.Error()
 	}
-	
+
 	return resp
 }
 
@@ -172,7 +172,7 @@ func GenerateMessageID() string {
 func GenerateNonce() string {
 	// Get current timestamp in milliseconds
 	timestamp := time.Now().UnixMilli()
-	
+
 	// Generate 4 random bytes
 	randomBytes := make([]byte, 4)
 	if _, err := rand.Read(randomBytes); err != nil {
@@ -185,7 +185,7 @@ func GenerateNonce() string {
 			byte(timestamp),
 		}
 	}
-	
+
 	// Format: timestamp_ms-random_hex (simple and short)
 	return fmt.Sprintf("%d-%x", timestamp, randomBytes)
 }
@@ -209,7 +209,7 @@ func validateWorkerMessage(msg *WorkerMessage) error {
 	if msg.Protocol != HERMES_WORKER {
 		return fmt.Errorf("invalid protocol: %s", msg.Protocol)
 	}
-	
+
 	switch msg.Command {
 	case HERMES_READY:
 		if msg.Service == "" {
@@ -224,7 +224,7 @@ func validateWorkerMessage(msg *WorkerMessage) error {
 	default:
 		return fmt.Errorf("unknown worker command: %s", msg.Command)
 	}
-	
+
 	return nil
 }
 
@@ -233,7 +233,7 @@ func validateClientMessage(msg *ClientMessage) error {
 	if msg.Protocol != HERMES_CLIENT {
 		return fmt.Errorf("invalid protocol: %s", msg.Protocol)
 	}
-	
+
 	switch msg.Command {
 	case HERMES_REQ:
 		if msg.Service == "" {
@@ -245,7 +245,7 @@ func validateClientMessage(msg *ClientMessage) error {
 	default:
 		return fmt.Errorf("unknown client command: %s", msg.Command)
 	}
-	
+
 	return nil
 }
 

@@ -71,18 +71,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case screenDeviceSetup:
 			var cmd tea.Cmd
 			m.setupModel, cmd = m.setupModel.Update(msg)
-			
+
 			// Check if connection was successful
 			if m.setupModel.IsConnected() {
 				m.remoteModel = NewRemoteModelWithFlags(
-					m.setupModel.GetDevice(), 
+					m.setupModel.GetDevice(),
 					m.setupModel.GetDeviceInfo(),
 					m.setupModel.GetDebugMode(),
 					m.setupModel.GetTestMode(),
 				)
 				m.currentScreen = screenRemoteControl
 			}
-			
+
 			return m, cmd
 
 		case screenRemoteControl:
@@ -117,14 +117,14 @@ func StartTUI(debug, test bool) error {
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
-	
+
 	// Ensure proper cleanup on panic or interrupt
 	defer func() {
 		if r := recover(); r != nil {
 			p.Kill()
 		}
 	}()
-	
+
 	_, err := p.Run()
 	return err
 }

@@ -27,11 +27,11 @@ import (
 )
 
 var (
-	hubConfigPath   string
-	hubDebugFlag    bool
-	hubTestFlag     bool
-	hubGatewayURL   string
-	hubVerboseFlag  bool
+	hubConfigPath  string
+	hubDebugFlag   bool
+	hubTestFlag    bool
+	hubGatewayURL  string
+	hubVerboseFlag bool
 )
 
 var hubCmd = &cobra.Command{
@@ -65,29 +65,29 @@ The hub provides secure, centralized device control and management.`,
 		if _, err := os.Stat(hubConfigPath); os.IsNotExist(err) {
 			// Create config with real generated keys
 			log.Info().Msg("No configuration found, creating new hub configuration with keys...")
-			
+
 			config, err := hub.NewConfigWithKeys("", "")
 			if err != nil {
 				log.Error().Err(err).Msg("Failed to generate hub configuration with keys")
 				return fmt.Errorf("failed to generate hub configuration: %w", err)
 			}
-			
+
 			if err := hub.SaveConfig(config, hubConfigPath); err != nil {
 				log.Error().Err(err).Msg("Failed to save configuration file")
 				return fmt.Errorf("failed to save configuration file: %w", err)
 			}
-			
+
 			log.Info().
 				Str("config_path", hubConfigPath).
 				Str("hub_public_key", config.Hub.PublicKey).
 				Msg("Created configuration file with generated keys")
-			
+
 			cmd.Printf("✅ Hub configuration created: %s\n", hubConfigPath)
 			cmd.Printf("✅ Hub keys generated automatically\n")
 			cmd.Printf("🔑 Product Key: %s\n", config.Hub.ProductKey)
 			cmd.Printf("🔑 Public Key: %s\n", config.Hub.PublicKey)
 			cmd.Printf("\n")
-			
+
 			// Offer interactive registration
 			registrationSuccess := false
 			if promptForRegistration() {
@@ -105,7 +105,7 @@ The hub provides secure, centralized device control and management.`,
 				showManualSteps(cmd, hubConfigPath)
 				return nil
 			}
-			
+
 			// If registration was successful, reload the config with gateway info and continue
 			if registrationSuccess {
 				// Reload config to get updated gateway information
@@ -206,7 +206,7 @@ var hubConfigValidateCmd = &cobra.Command{
 		cmd.Printf("Configuration file is valid: %s\n", configPath)
 		cmd.Printf("Gateway endpoint: %s\n", config.Gateway.Endpoint)
 		cmd.Printf("Configured devices: %d\n", len(config.Devices))
-		
+
 		for _, device := range config.Devices {
 			cmd.Printf("  - %s (%s) at %s\n", device.ID, device.Type, device.Address)
 		}
@@ -252,7 +252,7 @@ var hubKeysGenerateCmd = &cobra.Command{
 			if config.HasValidHubKeys() {
 				cmd.Printf("Hub keys already exist in: %s\n", hubConfigPath)
 				cmd.Print("Do you want to overwrite them? [y/N]: ")
-				
+
 				var response string
 				fmt.Scanln(&response)
 				if response != "y" && response != "Y" {
@@ -292,10 +292,10 @@ var hubKeysGenerateCmd = &cobra.Command{
 		if hubGatewayURL != "" {
 			cmd.Printf("Registering new keys with gateway...\n")
 			discovery := hub.NewGatewayDiscovery()
-			
+
 			// Use hub ID from configuration
 			hubID := config.Hub.ID
-			
+
 			err = discovery.RegisterWithGateway(hubGatewayURL, hubID, hubKeys.PublicKey, config.Hub.ProductKey)
 			if err != nil {
 				cmd.Printf("⚠ Gateway registration failed: %v\n", err)
@@ -325,7 +325,7 @@ var hubKeysShowCmd = &cobra.Command{
 		cmd.Printf("Key Type: curve25519\n")
 		cmd.Printf("Algorithm: CurveZMQ\n")
 		cmd.Printf("Key Strength: 256-bit\n")
-		
+
 		if config.HasValidGatewayKey() {
 			cmd.Printf("Gateway Key: %s\n", config.Gateway.PublicKey)
 			cmd.Printf("Gateway Endpoint: %s\n", config.Gateway.Endpoint)
@@ -362,7 +362,7 @@ func initializeHub(cmd *cobra.Command) error {
 	if _, err := os.Stat(hubConfigPath); err == nil {
 		configExists = true
 		cmd.Printf("✓ Configuration file already exists: %s\n", hubConfigPath)
-		
+
 		// Load existing config to check if keys are placeholders
 		existingConfig, err = hub.LoadConfig(hubConfigPath)
 		if err != nil {
@@ -381,7 +381,7 @@ func initializeHub(cmd *cobra.Command) error {
 		// Try to discover gateway
 		cmd.Printf("Discovering gateway...\n")
 		discovery := hub.NewGatewayDiscovery()
-		
+
 		if hubGatewayURL != "" {
 			// Use specific gateway URL
 			gatewayInfo, err = discovery.GetGatewayInfo(hubGatewayURL)
@@ -403,7 +403,7 @@ func initializeHub(cmd *cobra.Command) error {
 		// Create configuration with keys
 		gatewayEndpoint := ""
 		gatewayPublicKey := ""
-		
+
 		if gatewayInfo != nil {
 			gatewayEndpoint = gatewayInfo.ZMQEndpoint
 			gatewayPublicKey = gatewayInfo.PublicKey
@@ -429,7 +429,7 @@ func initializeHub(cmd *cobra.Command) error {
 	// Try to register with gateway if available
 	if gatewayInfo != nil && config.HasValidHubKeys() {
 		cmd.Printf("Registering with gateway...\n")
-		
+
 		discovery := hub.NewGatewayDiscovery()
 		err = discovery.RegisterWithGateway(gatewayInfo.APIEndpoint, config.Hub.ID, config.Hub.PublicKey, config.Hub.ProductKey)
 		if err != nil {
@@ -443,11 +443,11 @@ func initializeHub(cmd *cobra.Command) error {
 	cmd.Printf("\n✅ Hub initialization complete!\n")
 	cmd.Printf("Configuration: %s\n", hubConfigPath)
 	cmd.Printf("Hub ID: %s\n", config.Hub.ID)
-	
+
 	if config.HasValidHubKeys() {
 		cmd.Printf("Hub Public Key: %s\n", config.Hub.PublicKey)
 	}
-	
+
 	if config.HasValidGatewayKey() {
 		cmd.Printf("Gateway: %s\n", config.Gateway.Endpoint)
 		cmd.Printf("Status: Connected\n")
@@ -458,7 +458,7 @@ func initializeHub(cmd *cobra.Command) error {
 		cmd.Printf("1. Start gateway: lucas gateway\n")
 		cmd.Printf("2. Register hub: lucas hub register --gateway-url http://gateway:8080\n")
 	}
-	
+
 	cmd.Printf("\nStart hub with: lucas hub\n")
 
 	return nil
@@ -510,7 +510,7 @@ func registerWithGateway(cmd *cobra.Command) error {
 	} else {
 		// Update configuration with gateway info
 		config.UpdateGatewayInfo(gatewayInfo.ZMQEndpoint, gatewayInfo.PublicKey)
-		
+
 		// Save updated configuration
 		if err := hub.SaveConfig(config, hubConfigPath); err != nil {
 			cmd.Printf("⚠ Could not update configuration: %v\n", err)
@@ -538,11 +538,11 @@ func init() {
 	hubCmd.AddCommand(hubInitCmd)
 	hubCmd.AddCommand(hubKeysCmd)
 	hubCmd.AddCommand(hubRegisterCmd)
-	
+
 	// Config subcommands
 	hubConfigCmd.AddCommand(hubConfigGenerateCmd)
 	hubConfigCmd.AddCommand(hubConfigValidateCmd)
-	
+
 	// Keys subcommands
 	hubKeysCmd.AddCommand(hubKeysGenerateCmd)
 	hubKeysCmd.AddCommand(hubKeysShowCmd)
@@ -560,7 +560,7 @@ func init() {
 	hubKeysGenerateCmd.Flags().StringVarP(&hubConfigPath, "config", "c", "hub.yml", "Path to hub configuration file")
 	hubKeysShowCmd.Flags().StringVarP(&hubConfigPath, "config", "c", "hub.yml", "Path to hub configuration file")
 
-	// Config subcommand flags  
+	// Config subcommand flags
 	hubConfigGenerateCmd.Flags().StringVarP(&hubConfigPath, "config", "c", "hub.yml", "Path for generated configuration file")
 	hubConfigValidateCmd.Flags().StringVarP(&hubConfigPath, "config", "c", "hub.yml", "Path to configuration file to validate")
 
@@ -571,13 +571,13 @@ func init() {
 // promptForRegistration asks user if they want to register with gateway now
 func promptForRegistration() bool {
 	fmt.Print("📡 Register with gateway now? [y/N]: ")
-	
+
 	reader := bufio.NewReader(os.Stdin)
 	response, err := reader.ReadString('\n')
 	if err != nil {
 		return false
 	}
-	
+
 	response = strings.ToLower(strings.TrimSpace(response))
 	return response == "y" || response == "yes"
 }
@@ -585,7 +585,7 @@ func promptForRegistration() bool {
 // promptGatewayURL asks user for gateway URL with validation
 func promptGatewayURL() string {
 	reader := bufio.NewReader(os.Stdin)
-	
+
 	for {
 		fmt.Print("🌐 Gateway URL (http://localhost:8080): ")
 		input, err := reader.ReadString('\n')
@@ -593,25 +593,25 @@ func promptGatewayURL() string {
 			fmt.Printf("Error reading input: %v\n", err)
 			return ""
 		}
-		
+
 		input = strings.TrimSpace(input)
-		
+
 		// Use default if empty
 		if input == "" {
 			input = "http://localhost:8080"
 		}
-		
+
 		// Validate URL format
 		if _, err := url.Parse(input); err != nil {
 			fmt.Printf("⚠ Invalid URL format. Please try again.\n")
 			continue
 		}
-		
+
 		// Ensure http/https prefix
 		if !strings.HasPrefix(input, "http://") && !strings.HasPrefix(input, "https://") {
 			input = "http://" + input
 		}
-		
+
 		return input
 	}
 }
@@ -619,13 +619,13 @@ func promptGatewayURL() string {
 // performInteractiveRegistration handles the interactive registration flow
 func performInteractiveRegistration(config *hub.Config, gatewayURL string) {
 	fmt.Printf("🔍 Discovering gateway at %s...\n", gatewayURL)
-	
+
 	// Use hub ID from configuration file (don't generate a new one)
 	hubID := config.Hub.ID
-	
+
 	// Discovery and registration
 	discovery := hub.NewGatewayDiscovery()
-	
+
 	// Check if gateway is reachable
 	gatewayInfo, err := discovery.GetGatewayInfo(gatewayURL)
 	if err != nil {
@@ -633,10 +633,10 @@ func performInteractiveRegistration(config *hub.Config, gatewayURL string) {
 		fmt.Println("💡 Make sure gateway is running and try: lucas hub register --gateway-url " + gatewayURL)
 		return
 	}
-	
+
 	fmt.Printf("✅ Gateway found at %s\n", gatewayInfo.APIEndpoint)
 	fmt.Printf("📝 Registering hub...\n")
-	
+
 	// Register with gateway
 	err = discovery.RegisterWithGateway(gatewayInfo.APIEndpoint, hubID, config.Hub.PublicKey, config.Hub.ProductKey)
 	if err != nil {
@@ -644,13 +644,13 @@ func performInteractiveRegistration(config *hub.Config, gatewayURL string) {
 		fmt.Println("💡 You can try again with: lucas hub register --gateway-url " + gatewayURL)
 		return
 	}
-	
+
 	fmt.Printf("✅ Hub registered successfully!\n")
 	fmt.Printf("🆔 Hub ID: %s\n", hubID)
-	
+
 	// Update config with gateway information
 	config.UpdateGatewayInfo(gatewayInfo.ZMQEndpoint, gatewayInfo.PublicKey)
-	
+
 	// Save updated config
 	if err := hub.SaveConfig(config, hubConfigPath); err != nil {
 		fmt.Printf("⚠ Warning: Could not update config with gateway info: %v\n", err)

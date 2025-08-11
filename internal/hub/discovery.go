@@ -24,11 +24,11 @@ import (
 
 // GatewayInfo represents information about a discovered gateway
 type GatewayInfo struct {
-	APIEndpoint   string `json:"api_endpoint"`
-	ZMQEndpoint   string `json:"zmq_endpoint"`
-	PublicKey     string `json:"public_key"`
-	Version       string `json:"version"`
-	Online        bool   `json:"online"`
+	APIEndpoint string `json:"api_endpoint"`
+	ZMQEndpoint string `json:"zmq_endpoint"`
+	PublicKey   string `json:"public_key"`
+	Version     string `json:"version"`
+	Online      bool   `json:"online"`
 }
 
 // GatewayDiscovery handles gateway discovery and API communication
@@ -129,7 +129,7 @@ func (gd *GatewayDiscovery) CheckGateway(baseURL string) (*GatewayInfo, error) {
 // RegisterWithGateway registers the hub with the gateway
 func (gd *GatewayDiscovery) RegisterWithGateway(gatewayURL, hubID, hubPublicKey, productKey string) error {
 	registerURL := gatewayURL + "/api/v1/hub/register"
-	
+
 	// Prepare registration payload
 	payload := map[string]interface{}{
 		"hub_id":      hubID,

@@ -15,9 +15,6 @@
 package cmd
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/spf13/cobra"
 	"lucas/internal/logger"
 )
@@ -48,10 +45,10 @@ func Execute() error {
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
-	
+
 	// Initialize gateway command configuration
 	initGatewayCmd()
-	
+
 	// Add subcommands
 	rootCmd.AddCommand(cliCmd)
 	rootCmd.AddCommand(hubCmd)
@@ -86,9 +83,4 @@ func initGatewayCmd() {
 	// Keys command flags (these still use the old defaults for backward compatibility)
 	gatewayKeysGenerateCmd.Flags().StringVar(&gatewayKeysPath, "keys", "gateway_keys.yml", "Path for generated keys file")
 	gatewayKeysShowCmd.Flags().StringVar(&gatewayKeysPath, "keys", "gateway_keys.yml", "Path to keys file")
-}
-
-func exitWithError(err error) {
-	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-	os.Exit(1)
 }

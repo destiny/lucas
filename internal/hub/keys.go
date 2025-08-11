@@ -152,14 +152,14 @@ func (hk *HubKeys) Validate() error {
 	if err := hk.Hub.Validate(); err != nil {
 		return fmt.Errorf("invalid hub keys: %w", err)
 	}
-	
+
 	// Gateway key is optional (may not be set yet)
 	if hk.Gateway != "" {
 		if err := ValidateCurveKey(hk.Gateway); err != nil {
 			return fmt.Errorf("invalid gateway public key: %w", err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -274,12 +274,12 @@ func (hk *HubKeys) GetKeyInfo() HubKeyInfo {
 
 // HubSecurityInfo provides security-related information about the keys
 type HubSecurityInfo struct {
-	KeyStrength   string `json:"key_strength"`
-	Algorithm     string `json:"algorithm"`
-	Curve         string `json:"curve"`
-	KeyLength     int    `json:"key_length"`
-	CreationTime  string `json:"creation_time,omitempty"`
-	LastUsed      string `json:"last_used,omitempty"`
+	KeyStrength  string `json:"key_strength"`
+	Algorithm    string `json:"algorithm"`
+	Curve        string `json:"curve"`
+	KeyLength    int    `json:"key_length"`
+	CreationTime string `json:"creation_time,omitempty"`
+	LastUsed     string `json:"last_used,omitempty"`
 }
 
 // GetSecurityInfo returns security information about the hub keys

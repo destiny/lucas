@@ -27,9 +27,9 @@ import (
 
 // NonceResponse represents a cached response for a specific nonce
 type NonceResponse struct {
-	Nonce     string                  `json:"nonce"`
-	Response  *device.ActionResponse  `json:"response"`
-	Timestamp time.Time               `json:"timestamp"`
+	Nonce     string                 `json:"nonce"`
+	Response  *device.ActionResponse `json:"response"`
+	Timestamp time.Time              `json:"timestamp"`
 }
 
 // NonceCache manages nonce-based deduplication per device
@@ -65,7 +65,7 @@ func NewNonceCache(maxSize int, expiration time.Duration) *NonceCache {
 func GenerateNonce() string {
 	// Get current timestamp in milliseconds
 	timestamp := time.Now().UnixMilli()
-	
+
 	// Generate 4 random bytes
 	randomBytes := make([]byte, 4)
 	if _, err := rand.Read(randomBytes); err != nil {
@@ -78,7 +78,7 @@ func GenerateNonce() string {
 			byte(timestamp),
 		}
 	}
-	
+
 	// Format: timestamp_ms-random_hex
 	return fmt.Sprintf("%d-%x", timestamp, randomBytes)
 }
@@ -105,14 +105,14 @@ func (nc *NonceCache) CheckNonce(deviceID, nonce string) (*device.ActionResponse
 	}
 
 	cache := nc.getDeviceCache(deviceID)
-	
+
 	if cachedResponse, found := cache.Get(nonce); found {
 		// Check if the cached response has expired
 		if time.Since(cachedResponse.Timestamp) > nc.expiration {
 			cache.Remove(nonce)
 			return nil, false
 		}
-		
+
 		return cachedResponse.Response, true
 	}
 
@@ -126,13 +126,13 @@ func (nc *NonceCache) StoreResponse(deviceID, nonce string, response *device.Act
 	}
 
 	cache := nc.getDeviceCache(deviceID)
-	
+
 	nonceResponse := &NonceResponse{
 		Nonce:     nonce,
 		Response:  response,
 		Timestamp: time.Now(),
 	}
-	
+
 	cache.Add(nonce, nonceResponse)
 }
 
@@ -186,11 +186,11 @@ func (nc *NonceCache) GetStats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"total_devices":   totalDevices,
-		"total_nonces":    totalNonces,
-		"max_size":        nc.maxSize,
-		"expiration":      nc.expiration.String(),
-		"device_stats":    deviceStats,
+		"total_devices": totalDevices,
+		"total_nonces":  totalNonces,
+		"max_size":      nc.maxSize,
+		"expiration":    nc.expiration.String(),
+		"device_stats":  deviceStats,
 	}
 }
 
@@ -259,25 +259,25 @@ func ValidateNonce(nonce string) bool {
 	if nonce == "" {
 		return false
 	}
-	
+
 	// Basic format validation: should be at least 13 characters (timestamp-hex)
 	// Example: 1691234567890-a1b2c3d4 (13 + 1 + 8 = 22 chars minimum)
 	if len(nonce) < 13 {
 		return false
 	}
-	
+
 	// Must contain exactly one dash separator
 	dashCount := strings.Count(nonce, "-")
 	if dashCount != 1 {
 		return false
 	}
-	
+
 	// Find dash position
 	dashIndex := strings.Index(nonce, "-")
 	if dashIndex <= 0 || dashIndex >= len(nonce)-1 {
 		return false
 	}
-	
+
 	// Timestamp part should be numeric
 	timestampPart := nonce[:dashIndex]
 	if len(timestampPart) < 13 { // Unix timestamp in milliseconds is 13+ digits
@@ -288,7 +288,7 @@ func ValidateNonce(nonce string) bool {
 			return false
 		}
 	}
-	
+
 	// Random part should be 8-character hex
 	randomPart := nonce[dashIndex+1:]
 	if len(randomPart) != 8 {
@@ -299,6 +299,6 @@ func ValidateNonce(nonce string) bool {
 			return false
 		}
 	}
-	
+
 	return true
 }

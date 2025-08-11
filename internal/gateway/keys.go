@@ -97,7 +97,7 @@ func LoadGatewayKeys(keyFile string) (*GatewayKeys, error) {
 	}
 
 	var keys GatewayKeys
-	
+
 	// Determine format based on file extension or content
 	if isYAMLFormat(keyFile, data) {
 		if err := yaml.Unmarshal(data, &keys); err != nil {
@@ -121,7 +121,7 @@ func LoadGatewayKeys(keyFile string) (*GatewayKeys, error) {
 func SaveGatewayKeys(keys *GatewayKeys, keyFile string) error {
 	var data []byte
 	var err error
-	
+
 	// Determine format based on file extension
 	if isYAMLExtension(keyFile) {
 		data, err = yaml.Marshal(keys)
@@ -251,12 +251,12 @@ func (gk *GatewayKeys) ExportPublicKey() string {
 
 // SecurityInfo provides security-related information about the keys
 type SecurityInfo struct {
-	KeyStrength   string `json:"key_strength"`
-	Algorithm     string `json:"algorithm"`
-	Curve         string `json:"curve"`
-	KeyLength     int    `json:"key_length"`
-	CreationTime  string `json:"creation_time,omitempty"`
-	LastUsed      string `json:"last_used,omitempty"`
+	KeyStrength  string `json:"key_strength"`
+	Algorithm    string `json:"algorithm"`
+	Curve        string `json:"curve"`
+	KeyLength    int    `json:"key_length"`
+	CreationTime string `json:"creation_time,omitempty"`
+	LastUsed     string `json:"last_used,omitempty"`
 }
 
 // GetSecurityInfo returns security information about the keys
@@ -281,14 +281,14 @@ func isYAMLFormat(filename string, content []byte) bool {
 	if isYAMLExtension(filename) {
 		return true
 	}
-	
+
 	// For files without clear extensions, try to detect based on content
 	// YAML typically starts with keys without quotes, JSON starts with {
 	contentStr := strings.TrimSpace(string(content))
 	if strings.HasPrefix(contentStr, "{") {
 		return false // Likely JSON
 	}
-	
+
 	// If it contains lines with key: value pattern, likely YAML
 	lines := strings.Split(contentStr, "\n")
 	for _, line := range lines {
@@ -300,6 +300,6 @@ func isYAMLFormat(filename string, content []byte) bool {
 			break
 		}
 	}
-	
+
 	return false // Default to JSON
 }
