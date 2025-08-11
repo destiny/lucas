@@ -1,16 +1,18 @@
 package cli
 
 import (
+	"lucas/internal"
 	"net"
 	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"lucas/internal/bravia"
 	"lucas/internal/device"
 	"lucas/internal/logger"
+
+	"github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Setup screen input fields
@@ -52,7 +54,7 @@ type SetupModel struct {
 	// Flags
 	debugMode bool
 	testMode  bool
-	
+
 	// Configuration
 	configPath string
 }
@@ -278,7 +280,7 @@ func (m SetupModel) handleConnect() (SetupModel, tea.Cmd) {
 	// Let the HTTP client handle default ports naturally
 
 	// Create device connection with debug and test flags
-	device := bravia.NewBraviaRemoteWithFlags(m.hostAddress, m.credential, m.debugMode, m.testMode)
+	device := bravia.NewBraviaRemote(m.hostAddress, m.credential, internal.NewModeOptions(internal.WithDebug(m.debugMode), internal.WithTest(m.testMode)))
 
 	// Test connection by getting device info
 	deviceInfo := device.GetDeviceInfo()
@@ -533,11 +535,11 @@ func (m SetupModel) handleConfigureDevices() (SetupModel, tea.Cmd) {
 	// For now, we'll show a placeholder message
 	// In a full implementation, the parent application would handle switching
 	// to the device configuration screen using the config path: m.configPath
-	
+
 	log := logger.New()
 	log.Info().
 		Str("config_path", m.configPath).
 		Msg("Device configuration requested - would launch device config screen")
-	
+
 	return m, nil
 }

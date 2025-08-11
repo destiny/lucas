@@ -2,12 +2,14 @@ package hub
 
 import (
 	"fmt"
+	"lucas/internal"
 	"sync"
 	"time"
 
 	"lucas/internal/bravia"
 	"lucas/internal/device"
 	"lucas/internal/logger"
+
 	"github.com/rs/zerolog"
 )
 
@@ -71,8 +73,8 @@ func (dm *DeviceManager) createDevice(config DeviceConfig, debug, testMode bool)
 		if config.Credential == "" {
 			return nil, fmt.Errorf("credential is required for bravia device")
 		}
-		return bravia.NewBraviaRemoteWithFlags(config.Address, config.Credential, debug, testMode), nil
-	
+		return bravia.NewBraviaRemote(config.Address, config.Credential, internal.NewModeOptions(internal.WithDebug(debug), internal.WithTest(testMode))), nil
+
 	default:
 		return nil, fmt.Errorf("unsupported device type: %s", config.Type)
 	}

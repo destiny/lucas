@@ -9,7 +9,13 @@ import (
 )
 
 var logger zerolog.Logger
-var silentMode bool
+
+const (
+	LOG_INFO  = "info"
+	LOG_DEBUG = "debug"
+	LOG_WARN  = "warn"
+	LOG_ERROR = "error"
+)
 
 func init() {
 	// Default to silent mode (no output)
@@ -18,8 +24,7 @@ func init() {
 
 // SetSilentMode configures whether logging should be silent or output to stderr
 func SetSilentMode(silent bool) {
-	silentMode = silent
-	
+
 	var output io.Writer
 	if silent {
 		output = io.Discard
@@ -31,9 +36,9 @@ func SetSilentMode(silent bool) {
 			NoColor:    false,
 		}
 	}
-	
+
 	logger = zerolog.New(output).With().Timestamp().Logger()
-	
+
 	// Set default level to info
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 }
@@ -46,13 +51,13 @@ func New() zerolog.Logger {
 // SetLevel sets the global log level
 func SetLevel(level string) {
 	switch level {
-	case "debug":
+	case LOG_DEBUG:
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	case "info":
+	case LOG_INFO:
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
-	case "warn":
+	case LOG_WARN:
 		zerolog.SetGlobalLevel(zerolog.WarnLevel)
-	case "error":
+	case LOG_ERROR:
 		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
 	default:
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)

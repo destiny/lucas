@@ -1,10 +1,5 @@
 package device
 
-import (
-	"encoding/json"
-	"fmt"
-)
-
 // Device represents a generic device that can process commands
 type Device interface {
 	// Process handles a JSON-encoded action and executes the corresponding operation
@@ -87,22 +82,3 @@ const (
 	ControlActionSetVolume      ControlAction = "set_volume"
 	ControlActionSetMute        ControlAction = "set_mute"
 )
-
-// parseActionRequest parses JSON input into ActionRequest
-func parseActionRequest(actionJSON []byte) (*ActionRequest, error) {
-	var request ActionRequest
-	if err := json.Unmarshal(actionJSON, &request); err != nil {
-		return nil, fmt.Errorf("failed to parse action request: %w", err)
-	}
-
-	// Validate required fields
-	if request.Type == "" {
-		return nil, fmt.Errorf("action type is required")
-	}
-
-	if request.Action == "" {
-		return nil, fmt.Errorf("action is required")
-	}
-
-	return &request, nil
-}

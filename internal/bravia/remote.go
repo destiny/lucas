@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"lucas/internal"
 	"lucas/internal/device"
 	"strconv"
 )
@@ -15,19 +16,13 @@ type BraviaRemote struct {
 }
 
 // NewBraviaRemote creates a new BraviaRemote device
-func NewBraviaRemote(address, credential string, debug bool) *BraviaRemote {
-	return NewBraviaRemoteWithFlags(address, credential, debug, false)
-}
-
-// NewBraviaRemoteWithFlags creates a new BraviaRemote device with test mode support
-func NewBraviaRemoteWithFlags(address, credential string, debug, testMode bool) *BraviaRemote {
-	client := NewBraviaClientWithFlags(address, credential, debug, testMode)
-
+func NewBraviaRemote(address, credential string, options *internal.FnModeOptions) *BraviaRemote {
+	client := NewBraviaClient(address, credential, options)
 	return &BraviaRemote{
 		client: client,
 		info: device.DeviceInfo{
 			ID:      "", // Will be set from configuration
-			Name:    "", // Will be set from configuration  
+			Name:    "", // Will be set from configuration
 			Type:    "bravia_tv",
 			Model:   "Sony Bravia",
 			Address: address,
@@ -258,19 +253,18 @@ func parseActionRequest(actionJSON []byte) (*device.ActionRequest, error) {
 	if err := json.Unmarshal(actionJSON, &request); err != nil {
 		return nil, fmt.Errorf("failed to parse action request: %w", err)
 	}
-	
+
 	// Validate required fields
 	if request.Type == "" {
 		return nil, fmt.Errorf("action type is required")
 	}
-	
+
 	if request.Action == "" {
 		return nil, fmt.Errorf("action is required")
 	}
-	
+
 	return &request, nil
 }
-
 
 // remoteActionMap maps RemoteAction to BraviaRemoteCode
 var remoteActionMap = map[device.RemoteAction]BraviaRemoteCode{
