@@ -1,3 +1,17 @@
+// Copyright 2025 Arion Yau
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package hermes
 
 import (
@@ -223,11 +237,11 @@ func (w *HermesWorker) messageLoop() {
 				continue
 			}
 
-			// Receive message from broker
-			msg, err := w.socket.RecvMessageBytes(0)
+			// Receive message from broker (non-blocking to prevent hang)
+			msg, err := w.socket.RecvMessageBytes(zmq4.DONTWAIT)
 			if err != nil {
 				if err.Error() == "resource temporarily unavailable" {
-					// Normal socket timeout - continue processing
+					// No message available - normal with non-blocking mode
 					// Don't decrement liveness here as this is expected behavior
 					w.mutex.RLock()
 					state := w.state
@@ -237,14 +251,20 @@ func (w *HermesWorker) messageLoop() {
 						continue
 					}
 					
-					// Just continue, liveness will be managed by heartbeat success/failure
+					// Small sleep to prevent busy waiting while staying responsive
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 				
-				w.logger.Error().Err(err).Msg("Failed to receive message from broker")
+				w.logger.Error().Err(err).Msg("Worker failed to receive message from broker")
 				w.reconnectToBroker()
 				continue
 			}
+
+			w.logger.Debug().
+				Int("message_parts", len(msg)).
+				Str("service", w.service).
+				Msg("Worker received message from broker")
 
 			if len(msg) < 2 {
 				w.logger.Warn().
@@ -325,7 +345,8 @@ func (w *HermesWorker) handleRequest(clientID string, body []byte, extraParts []
 		Str("client_id", clientID).
 		Int("request_num", requestNum).
 		Int("body_size", len(body)).
-		Msg("Processing service request")
+		Str("service", w.service).
+		Msg("Worker processing service request")
 
 	// Use body from extra parts if available (for large messages)
 	requestBody := body
@@ -379,7 +400,8 @@ func (w *HermesWorker) handleRequest(clientID string, body []byte, extraParts []
 		Str("client_id", clientID).
 		Int("request_num", requestNum).
 		Int("response_size", len(response)).
-		Msg("Request processed successfully")
+		Str("service", w.service).
+		Msg("Worker request processed successfully, sending reply")
 
 	return nil
 }

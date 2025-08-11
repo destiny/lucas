@@ -1,3 +1,17 @@
+// Copyright 2025 Arion Yau
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package hermes
 
 import (
@@ -565,7 +579,42 @@ func (b *Broker) handleClientRequest(clientID string, msg *ClientMessage) error 
 		return b.sendToClient(clientID, respBytes)
 	}
 
-	// Try to assign to available worker
+	// For hub.control service, use direct worker lookup (1:1 mapping)
+	if msg.Service == "hub.control" {
+		// Find the hub worker directly by iterating through workers for this service
+		service.mutex.Lock()
+		var hubWorker *BrokerWorker
+		for _, worker := range service.Workers {
+			if worker.Service == "hub.control" && worker.Status == "ready" {
+				hubWorker = worker
+				break
+			}
+		}
+		service.mutex.Unlock()
+		
+		if hubWorker != nil {
+			b.logger.Debug().
+				Str("client_id", clientID).
+				Str("service", msg.Service).
+				Str("hub_worker_id", hubWorker.Identity).
+				Str("message_id", msg.MessageID).
+				Msg("Routing request directly to hub worker")
+			return b.sendToWorker(hubWorker.Identity, clientID, msg.Body)
+		} else {
+			// Hub worker not available
+			b.logger.Warn().
+				Str("client_id", clientID).
+				Str("service", msg.Service).
+				Str("message_id", msg.MessageID).
+				Msg("Hub worker not available")
+			errorResp := CreateServiceResponse(msg.MessageID, msg.Service, false, nil, 
+				fmt.Errorf("hub worker not available"))
+			respBytes, _ := SerializeServiceResponse(errorResp)
+			return b.sendToClient(clientID, respBytes)
+		}
+	}
+
+	// For other services, use the queue system
 	service.mutex.Lock()
 	defer service.mutex.Unlock()
 

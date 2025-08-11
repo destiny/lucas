@@ -1,3 +1,17 @@
+// Copyright 2025 Arion Yau
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package hermes
 
 import (
@@ -163,7 +177,7 @@ func (c *HermesClient) connect() error {
 		return fmt.Errorf("failed to set linger: %w", err)
 	}
 
-	if err = socket.SetRcvtimeo(1 * time.Second); err != nil {
+	if err = socket.SetRcvtimeo(5 * time.Second); err != nil {
 		socket.Close()
 		return fmt.Errorf("failed to set receive timeout: %w", err)
 	}
@@ -193,11 +207,12 @@ func (c *HermesClient) Request(service string, body []byte) ([]byte, error) {
 func (c *HermesClient) RequestWithTimeout(service string, body []byte, timeout time.Duration) ([]byte, error) {
 	messageID := GenerateMessageID()
 	
-	c.logger.Debug().
+	c.logger.Info().
 		Str("service", service).
 		Str("message_id", messageID).
 		Int("body_size", len(body)).
 		Dur("timeout", timeout).
+		Int("pending_requests", len(c.pending)).
 		Msg("Sending request to service")
 
 	// Create pending request
@@ -240,12 +255,13 @@ func (c *HermesClient) RequestWithTimeout(service string, body []byte, timeout t
 			latency := time.Since(pending.Timestamp)
 			c.recordLatency(latency)
 			
-			c.logger.Debug().
+			c.logger.Info().
 				Str("service", service).
 				Str("message_id", messageID).
 				Dur("latency", latency).
 				Int("response_size", len(response)).
-				Msg("Received response")
+				Int("attempt", attempt).
+				Msg("Received successful response")
 			
 			// Clean up pending request
 			c.mutex.Lock()
@@ -490,14 +506,22 @@ func (c *HermesClient) messageLoop() {
 				continue
 			}
 
-			// Receive message from broker
-			msg, err := c.socket.RecvMessageBytes(0)
+			// Receive message from broker (non-blocking)
+			msg, err := c.socket.RecvMessageBytes(zmq4.DONTWAIT)
 			if err != nil {
-				if err.Error() != "resource temporarily unavailable" {
+				if err.Error() == "resource temporarily unavailable" {
+					// No message available - sleep briefly to prevent busy waiting
+					time.Sleep(10 * time.Millisecond)
+					continue
+				} else {
 					c.logger.Error().Err(err).Msg("Failed to receive message from broker")
 				}
 				continue
 			}
+
+			c.logger.Debug().
+				Int("message_parts", len(msg)).
+				Msg("Client received message from broker")
 
 			if len(msg) < 2 {
 				c.logger.Warn().

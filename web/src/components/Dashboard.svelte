@@ -1,9 +1,27 @@
+/*
+ * Copyright 2025 Arion Yau
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 <script lang="ts">
   import { onMount } from 'svelte';
   import { auth, apiClient } from '../lib/auth';
+  import HubClaiming from './HubClaiming.svelte';
 
   // Props
   export let onSelectDevice: (device: any) => void = () => {};
+  export let onConfigureHub: (hubId: string) => void = () => {};
 
   $: authState = $auth;
   $: user = authState.user;
@@ -13,6 +31,7 @@
   let hubs: any[] = [];
   let loading = true;
   let error: string | null = null;
+  let showClaimModal = false;
 
   $: token = $auth.token;
 
@@ -52,6 +71,18 @@
     }
   }
 
+  function openClaimModal() {
+    showClaimModal = true;
+  }
+
+  function closeClaimModal() {
+    showClaimModal = false;
+  }
+
+  function handleHubClaimed() {
+    loadData(); // Refresh the hub list
+  }
+
   onMount(() => {
     loadData();
   });
@@ -88,9 +119,22 @@
 
       <!-- Hubs Section -->
       <section class="hubs-section">
-        <h2>Your Hubs ({hubs.length})</h2>
+        <div class="section-header">
+          <h2>Your Hubs ({hubs.length})</h2>
+          <button class="claim-hub-btn" on:click={openClaimModal}>
+            + Claim Hub
+          </button>
+        </div>
         {#if hubs.length === 0}
-          <p class="empty-state">No hubs found. Connect a hub to get started.</p>
+          <div class="empty-state-card">
+            <div class="empty-content">
+              <h3>No hubs claimed yet</h3>
+              <p>Claim your first Lucas hub to start managing your smart home devices.</p>
+              <button class="primary-claim-btn" on:click={openClaimModal}>
+                Claim Your First Hub
+              </button>
+            </div>
+          </div>
         {:else}
           <div class="hubs-grid">
             {#each hubs as hub}
@@ -101,6 +145,11 @@
                 {#if hub.last_seen}
                   <p><strong>Last Seen:</strong> {new Date(hub.last_seen).toLocaleString()}</p>
                 {/if}
+                <div class="hub-actions">
+                  <button class="config-btn" on:click={() => onConfigureHub(hub.hub_id)}>
+                    Configure Devices
+                  </button>
+                </div>
               </div>
             {/each}
           </div>
@@ -151,6 +200,15 @@
       </section>
     </div>
   {/if}
+
+  <!-- Hub Claiming Modal -->
+  {#if showClaimModal}
+    <HubClaiming 
+      onHubClaimed={handleHubClaimed}
+      onClose={closeClaimModal}
+      showAsModal={true}
+    />
+  {/if}
 </div>
 
 <style>
@@ -194,6 +252,78 @@
     margin-bottom: 1rem;
   }
 
+  .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+
+  .section-header h2 {
+    margin: 0;
+    border: none;
+    padding: 0;
+  }
+
+  .claim-hub-btn {
+    background: #4CAF50;
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+  }
+
+  .claim-hub-btn:hover {
+    background: #45a049;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(76, 175, 80, 0.3);
+  }
+
+  .empty-state-card {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border: 2px dashed #dee2e6;
+    border-radius: 12px;
+    padding: 3rem 2rem;
+    text-align: center;
+    margin: 2rem 0;
+  }
+
+  .empty-content h3 {
+    color: #495057;
+    margin: 0 0 1rem 0;
+    font-size: 1.25rem;
+  }
+
+  .empty-content p {
+    color: #6c757d;
+    margin: 0 0 2rem 0;
+    font-size: 1rem;
+    line-height: 1.5;
+  }
+
+  .primary-claim-btn {
+    background: #2196F3;
+    color: white;
+    border: none;
+    padding: 1rem 2rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 1rem;
+    transition: all 0.2s;
+    box-shadow: 0 2px 4px rgba(33, 150, 243, 0.2);
+  }
+
+  .primary-claim-btn:hover {
+    background: #1976D2;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4);
+  }
+
   .status-info {
     background: #f5f5f5;
     padding: 1rem;
@@ -227,6 +357,29 @@
   .hub-card p, .device-card p {
     margin: 0.5rem 0;
     color: #666;
+  }
+
+  .hub-actions {
+    margin-top: 1rem;
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .config-btn {
+    background: #4CAF50;
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: background-color 0.2s;
+  }
+
+  .config-btn:hover {
+    background: #45a049;
   }
 
   .device-actions {

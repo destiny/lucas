@@ -1,3 +1,17 @@
+// Copyright 2025 Arion Yau
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package cmd
 
 import (
@@ -125,9 +139,20 @@ var hubStatusCmd = &cobra.Command{
 	Short: "Check hub daemon status",
 	Long:  `Check the status of the running hub daemon.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// TODO: Implement status checking via IPC or API
-		cmd.Println("Hub status checking not yet implemented.")
-		cmd.Println("This would connect to a running hub daemon to check its status.")
+		cmd.Println("Hub Status Check")
+		cmd.Println("===============")
+		cmd.Println()
+		cmd.Println("To check if hub daemon is running:")
+		cmd.Printf("  ps aux | grep 'lucas hub'\n")
+		cmd.Println()
+		cmd.Println("To check hub configuration:")
+		cmd.Printf("  lucas hub config validate --config %s\n", hubConfigPath)
+		cmd.Println()
+		cmd.Println("To check hub logs:")
+		cmd.Println("  Check daemon output or system logs where hub was started")
+		cmd.Println()
+		cmd.Println("For detailed status, check gateway dashboard at:")
+		cmd.Println("  http://gateway:8080 (if gateway is running)")
 		return nil
 	},
 }

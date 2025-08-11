@@ -1,3 +1,17 @@
+// Copyright 2025 Arion Yau
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package bravia_test
 
 import (
@@ -11,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"lucas/internal"
 	"lucas/internal/bravia"
 )
 
@@ -23,26 +38,33 @@ func createMockServer(handler http.HandlerFunc) *httptest.Server {
 func createTestClient(serverURL string, debug bool) *bravia.BraviaClient {
 	// Remove http:// prefix if present
 	address := strings.TrimPrefix(serverURL, "http://")
-	return bravia.NewBraviaClient(address, "test-credential", debug)
+	options := internal.FnModeOptions{
+		Debug: debug,
+		Test:  false,
+	}
+	return bravia.NewBraviaClient(address, "test-credential", options)
 }
 
 func TestNewBraviaClient(t *testing.T) {
 	t.Run("creates client with default values", func(t *testing.T) {
-		client := bravia.NewBraviaClient("192.168.1.100:80", "test-psk", false)
+		options := internal.FnModeOptions{Debug: false, Test: false}
+		client := bravia.NewBraviaClient("192.168.1.100:80", "test-psk", options)
 		
 		assert.NotNil(t, client)
 		// Test behavior rather than internal fields since they're not exported
 	})
 
 	t.Run("creates client with debug enabled", func(t *testing.T) {
-		client := bravia.NewBraviaClient("192.168.1.100:80", "test-psk", true)
+		options := internal.FnModeOptions{Debug: true, Test: false}
+		client := bravia.NewBraviaClient("192.168.1.100:80", "test-psk", options)
 		
 		assert.NotNil(t, client)
 		// Test behavior rather than internal fields since they're not exported
 	})
 
 	t.Run("handles empty credential", func(t *testing.T) {
-		client := bravia.NewBraviaClient("192.168.1.100:80", "", false)
+		options := internal.FnModeOptions{Debug: false, Test: false}
+		client := bravia.NewBraviaClient("192.168.1.100:80", "", options)
 		
 		assert.NotNil(t, client)
 		// Test behavior rather than internal fields since they're not exported
@@ -131,7 +153,8 @@ func TestRemoteRequest(t *testing.T) {
 	})
 
 	t.Run("handles network errors", func(t *testing.T) {
-		client := bravia.NewBraviaClient("invalid-host:80", "test-credential", false)
+		options := internal.FnModeOptions{Debug: false, Test: false}
+		client := bravia.NewBraviaClient("invalid-host:80", "test-credential", options)
 		err := client.RemoteRequest(bravia.PowerButton)
 		
 		assert.Error(t, err)
@@ -235,7 +258,8 @@ func TestControlRequest(t *testing.T) {
 	})
 
 	t.Run("handles JSON marshaling errors", func(t *testing.T) {
-		client := bravia.NewBraviaClient("localhost:80", "test", false)
+		options := internal.FnModeOptions{Debug: false, Test: false}
+		client := bravia.NewBraviaClient("localhost:80", "test", options)
 		
 		// Create payload with invalid data that can't be marshaled
 		payload := bravia.BraviaPayload{
@@ -292,7 +316,8 @@ func TestDebugLogging(t *testing.T) {
 
 	t.Run("masks credentials in debug output", func(t *testing.T) {
 		// This test verifies the credential masking logic exists
-		client := bravia.NewBraviaClient("test:80", "secret-credential", true)
+		options := internal.FnModeOptions{Debug: true, Test: false}
+		client := bravia.NewBraviaClient("test:80", "secret-credential", options)
 		
 		// Test the masking helper by calling it with a mock request
 		req, _ := http.NewRequest("POST", "http://test:80/test", bytes.NewBuffer([]byte("test")))
@@ -308,7 +333,8 @@ func TestDebugLogging(t *testing.T) {
 func TestErrorScenarios(t *testing.T) {
 	t.Run("handles connection timeout", func(t *testing.T) {
 		// Test with non-routable IP address which should timeout
-		client := bravia.NewBraviaClient("192.168.255.255:80", "test", false)
+		options := internal.FnModeOptions{Debug: false, Test: false}
+		client := bravia.NewBraviaClient("192.168.255.255:80", "test", options)
 		
 		err := client.RemoteRequest(bravia.PowerButton)
 		assert.Error(t, err)
