@@ -1,3 +1,17 @@
+// Copyright 2025 Arion Yau
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package hermes
 
 import (
@@ -26,44 +40,44 @@ const (
 
 // HermesWorker implements the Hermes Majordomo Protocol worker
 type HermesWorker struct {
-	broker            string
-	service           string
-	identity          string
-	socket            *zmq4.Socket
-	heartbeat         time.Duration
-	reconnect         time.Duration
-	liveness          int
-	handler           RequestHandler
-	state             WorkerState
-	ctx               context.Context
-	cancel            context.CancelFunc
-	logger            zerolog.Logger
-	stats             *WorkerStats
-	mutex             sync.RWMutex
-	requestCount      int
-	reconnectAttempt  int           // Track reconnection attempts for backoff
+	broker          string
+	service         string
+	identity        string
+	socket          *zmq4.Socket
+	heartbeat       time.Duration
+	reconnect       time.Duration
+	liveness        int
+	handler         RequestHandler
+	state           WorkerState
+	ctx             context.Context
+	cancel          context.CancelFunc
+	logger          zerolog.Logger
+	stats           *WorkerStats
+	mutex           sync.RWMutex
+	requestCount    int
+	reconnectAttempt int           // Track reconnection attempts for backoff
 	maxReconnectDelay time.Duration // Maximum backoff delay
 }
 
 // WorkerStats represents worker statistics
 type WorkerStats struct {
-	RequestsHandled       int       `json:"requests_handled"`
-	RequestsFailed        int       `json:"requests_failed"`
-	LastRequest           time.Time `json:"last_request"`
-	StartTime             time.Time `json:"start_time"`
-	Reconnections         int       `json:"reconnections"`
-	CurrentLiveness       int       `json:"current_liveness"`
-	State                 string    `json:"state"`
-	HeartbeatsSent        int       `json:"heartbeats_sent"`
-	HeartbeatsReceived    int       `json:"heartbeats_received"`
-	LastHeartbeatSent     time.Time `json:"last_heartbeat_sent"`
+	RequestsHandled     int       `json:"requests_handled"`
+	RequestsFailed      int       `json:"requests_failed"`
+	LastRequest         time.Time `json:"last_request"`
+	StartTime           time.Time `json:"start_time"`
+	Reconnections       int       `json:"reconnections"`
+	CurrentLiveness     int       `json:"current_liveness"`
+	State               string    `json:"state"`
+	HeartbeatsSent      int       `json:"heartbeats_sent"`
+	HeartbeatsReceived  int       `json:"heartbeats_received"`
+	LastHeartbeatSent   time.Time `json:"last_heartbeat_sent"`
 	LastHeartbeatReceived time.Time `json:"last_heartbeat_received"`
 }
 
 // NewWorker creates a new Hermes worker
 func NewWorker(broker, service, identity string, handler RequestHandler) *HermesWorker {
 	ctx, cancel := context.WithCancel(context.Background())
-
+	
 	return &HermesWorker{
 		broker:            broker,
 		service:           service,
@@ -223,28 +237,34 @@ func (w *HermesWorker) messageLoop() {
 				continue
 			}
 
-			// Receive message from broker
-			msg, err := w.socket.RecvMessageBytes(0)
+			// Receive message from broker (non-blocking to prevent hang)
+			msg, err := w.socket.RecvMessageBytes(zmq4.DONTWAIT)
 			if err != nil {
 				if err.Error() == "resource temporarily unavailable" {
-					// Normal socket timeout - continue processing
+					// No message available - normal with non-blocking mode
 					// Don't decrement liveness here as this is expected behavior
 					w.mutex.RLock()
 					state := w.state
 					w.mutex.RUnlock()
-
+					
 					if state == WorkerStateDisconnected {
 						continue
 					}
-
-					// Just continue, liveness will be managed by heartbeat success/failure
+					
+					// Small sleep to prevent busy waiting while staying responsive
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
-
-				w.logger.Error().Err(err).Msg("Failed to receive message from broker")
+				
+				w.logger.Error().Err(err).Msg("Worker failed to receive message from broker")
 				w.reconnectToBroker()
 				continue
 			}
+
+			w.logger.Debug().
+				Int("message_parts", len(msg)).
+				Str("service", w.service).
+				Msg("Worker received message from broker")
 
 			if len(msg) < 2 {
 				w.logger.Warn().
@@ -253,7 +273,7 @@ func (w *HermesWorker) messageLoop() {
 				continue
 			}
 
-			empty := msg[0]  // Should be empty frame
+			empty := msg[0] // Should be empty frame
 			header := msg[1] // Protocol header
 
 			if len(empty) != 0 {
@@ -263,7 +283,7 @@ func (w *HermesWorker) messageLoop() {
 
 			w.logger.Debug().
 				Int("parts_count", len(msg)).
-				Str("header_preview", string(header[:min(50, len(header))])+"...").
+				Str("header_preview", string(header[:min(50, len(header))]) + "...").
 				Msg("Received message from broker")
 
 			// Reset liveness on any valid message
@@ -325,7 +345,8 @@ func (w *HermesWorker) handleRequest(clientID string, body []byte, extraParts []
 		Str("client_id", clientID).
 		Int("request_num", requestNum).
 		Int("body_size", len(body)).
-		Msg("Processing service request")
+		Str("service", w.service).
+		Msg("Worker processing service request")
 
 	// Use body from extra parts if available (for large messages)
 	requestBody := body
@@ -336,7 +357,7 @@ func (w *HermesWorker) handleRequest(clientID string, body []byte, extraParts []
 	// Process request using handler
 	var response []byte
 	var err error
-
+	
 	if w.handler != nil {
 		response, err = w.handler.Handle(requestBody)
 	} else {
@@ -379,7 +400,8 @@ func (w *HermesWorker) handleRequest(clientID string, body []byte, extraParts []
 		Str("client_id", clientID).
 		Int("request_num", requestNum).
 		Int("response_size", len(response)).
-		Msg("Request processed successfully")
+		Str("service", w.service).
+		Msg("Worker request processed successfully, sending reply")
 
 	return nil
 }
@@ -555,7 +577,7 @@ func (w *HermesWorker) heartbeatLoop() {
 					}
 				}
 			}
-
+			
 			// Update ticker with new jitter to avoid long-term synchronization
 			jitter := time.Duration(rand.Intn(10000)-5000) * time.Millisecond
 			newInterval := w.heartbeat + jitter
@@ -582,16 +604,16 @@ func (w *HermesWorker) reconnectToBroker() {
 	// Calculate exponential backoff delay with jitter
 	// Formula: min(maxDelay, baseDelay * 2^attempt) + jitter
 	baseDelay := w.reconnect
-	backoffDelay := time.Duration(1<<uint(w.reconnectAttempt-1)) * baseDelay
+	backoffDelay := time.Duration(1 << uint(w.reconnectAttempt-1)) * baseDelay
 	if backoffDelay > w.maxReconnectDelay {
 		backoffDelay = w.maxReconnectDelay
 	}
-
+	
 	// Add jitter (±25% of delay) to prevent thundering herd
 	jitterRange := int64(backoffDelay / 4)
 	jitter := time.Duration(rand.Int63n(jitterRange*2) - jitterRange)
 	actualDelay := backoffDelay + jitter
-
+	
 	w.logger.Warn().
 		Int("attempt", w.reconnectAttempt).
 		Dur("delay", actualDelay).
@@ -615,7 +637,7 @@ func (w *HermesWorker) reconnectToBroker() {
 		w.mutex.Lock()
 		w.state = WorkerStateDisconnected
 		w.mutex.Unlock()
-
+		
 		// Schedule another reconnection attempt
 		go func() {
 			if w.ctx.Err() == nil { // Only if not shutting down

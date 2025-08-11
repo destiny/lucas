@@ -1,3 +1,19 @@
+/*
+ * Copyright 2025 Arion Yau
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 <script lang="ts">
     import { onMount } from 'svelte';
     import moment from 'moment';
@@ -6,12 +22,13 @@
     import RegisterForm from './components/RegisterForm.svelte';
     import Dashboard from './components/Dashboard.svelte';
     import RemoteControl from './components/RemoteControl.svelte';
+    import DeviceConfiguration from './components/DeviceConfiguration.svelte';
     
     // Svelte 5 compatible - using traditional reactive statements for now
 
     // Types
     type AuthView = 'login' | 'register';
-    type MainView = 'dashboard' | 'settings' | 'remote';
+    type MainView = 'dashboard' | 'settings' | 'remote' | 'device-config';
 
     // Gateway status state
     let gatewayStatus: any = null;
@@ -33,6 +50,7 @@
     let devices: any[] = [];
     let hubs: any[] = [];
     let selectedDevice: any = null;
+    let selectedHubForConfig: string = '';
 
     // Version numbering - YY.WW.N format
     function generateVersion(): string {
@@ -113,6 +131,18 @@
         currentMainView = 'dashboard';
     }
 
+    function showDeviceConfig(hubId: string = '') {
+        selectedHubForConfig = hubId;
+        currentMainView = 'device-config';
+    }
+
+    function closeDeviceConfig() {
+        selectedHubForConfig = '';
+        currentMainView = 'dashboard';
+        // Refresh user data after configuration changes
+        fetchUserData();
+    }
+
     // Watch for authentication changes
     $: if (isAuthenticated && authState?.token) {
         fetchUserData();
@@ -144,6 +174,15 @@
                     on:click={() => setMainView('dashboard')}
                 >
                     Dashboard
+                </button>
+            </li>
+            <li>
+                <button 
+                    class="nav-item"
+                    class:active={currentMainView === 'device-config'}
+                    on:click={() => showDeviceConfig()}
+                >
+                    Device Config
                 </button>
             </li>
             <li>
@@ -234,7 +273,10 @@
         {:else}
             <div class="main-content">
                 {#if currentMainView === 'dashboard'}
-                    <Dashboard onSelectDevice={selectDevice} />
+                    <Dashboard 
+                        onSelectDevice={selectDevice}
+                        onConfigureHub={showDeviceConfig}
+                    />
                 {:else if currentMainView === 'remote' && selectedDevice}
                     <div class="remote-view">
                         <div class="remote-header">
@@ -243,6 +285,11 @@
                         </div>
                         <RemoteControl device={selectedDevice} />
                     </div>
+                {:else if currentMainView === 'device-config'}
+                    <DeviceConfiguration 
+                        selectedHubId={selectedHubForConfig}
+                        onClose={closeDeviceConfig}
+                    />
                 {:else if currentMainView === 'settings'}
                     <div class="view-placeholder">
                         <h2>Settings</h2>

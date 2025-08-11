@@ -1,3 +1,17 @@
+// Copyright 2025 Arion Yau
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package gateway
 
 import (
@@ -351,7 +365,7 @@ func (bs *BrokerService) SendDeviceCommand(hubID, deviceID string, action json.R
 		return nil, fmt.Errorf("failed to marshal device request: %w", err)
 	}
 
-	// Use fire-and-forget mode for remote control commands
+	// Use fire-and-forget mode for remote control commands (now fixed in broker)
 	// This provides immediate response to user and handles responses asynchronously
 	bs.clientMutex.Lock()
 	defer bs.clientMutex.Unlock()
@@ -363,6 +377,13 @@ func (bs *BrokerService) SendDeviceCommand(hubID, deviceID string, action json.R
 	// Send as fire-and-forget request using nonce correlation
 	err = bs.client.RequestFireAndForget(serviceName, requestBytes, nonce)
 	if err != nil {
+		bs.logger.Error().
+			Str("hub_id", hubID).
+			Str("device_id", deviceID).
+			Str("nonce", nonce).
+			Str("message_id", messageID).
+			Err(err).
+			Msg("Device command failed to send")
 		return nil, fmt.Errorf("failed to send device command: %w", err)
 	}
 
@@ -384,7 +405,7 @@ func (bs *BrokerService) SendDeviceCommand(hubID, deviceID string, action json.R
 		Str("hub_id", hubID).
 		Str("device_id", deviceID).
 		Str("nonce", nonce).
-		Msg("Device command sent (fire-and-forget)")
+		Msg("Device command sent successfully")
 
 	return dataBytes, nil
 }
@@ -555,7 +576,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 		Bool("success", serviceResp.Success).
 		Str("message_id", serviceResp.MessageID).
 		Interface("data", serviceResp.Data).
-		Msg("[DEBUG] Gateway parsed service response")
+		Msg("Gateway parsed service response")
 
 	if !serviceResp.Success {
 		bs.logger.Error().
@@ -604,7 +625,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 	bs.logger.Debug().
 		Str("hub_id", hubID).
 		Interface("data_map", dataMap).
-		Msg("[DEBUG] Gateway extracted data map")
+		Msg("Gateway extracted data map")
 
 	// Check if the data contains error information instead of device list
 	if errorMsg, hasError := dataMap["error"]; hasError {
@@ -638,7 +659,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 	bs.logger.Debug().
 		Str("hub_id", hubID).
 		Str("devices_type", fmt.Sprintf("%T", devicesData)).
-		Msg("[DEBUG] Gateway found devices field")
+		Msg("Gateway found devices field")
 
 	devicesSlice, ok := devicesData.([]interface{})
 	if !ok {
@@ -652,7 +673,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 	bs.logger.Info().
 		Str("hub_id", hubID).
 		Int("devices_count", len(devicesSlice)).
-		Msg("[DEBUG] Gateway found devices array")
+		Msg("Gateway found devices array")
 
 	// Register each device
 	deviceCount := 0
@@ -701,7 +722,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 			Str("device_address", deviceAddress).
 			Interface("capabilities", capabilities).
 			Int("hub_db_id", hub.ID).
-			Msg("[DEBUG] Gateway creating device in database")
+			Msg("Gateway creating device in database")
 
 		// Create device in database
 		device, err := bs.database.CreateDevice(
@@ -726,7 +747,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 			Str("hub_id", hubID).
 			Str("device_id", deviceID).
 			Int("device_db_id", device.ID).
-			Msg("[DEBUG] Gateway successfully created device in database")
+			Msg("Gateway successfully created device in database")
 
 		// Update device status - default to online since hub is connected
 		finalStatus := "online"

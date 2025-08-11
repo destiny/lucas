@@ -54,6 +54,7 @@ type Daemon struct {
 	configPath    string
 	deviceManager *DeviceManager
 	workerService *WorkerService
+	configAPI     *ConfigAPIServer
 	logger        zerolog.Logger
 	running       bool
 	mutex         sync.RWMutex
@@ -89,6 +90,9 @@ func NewDaemon(configPath string, debug, testMode bool) (*Daemon, error) {
 
 	// Initialize worker service
 	daemon.workerService = NewWorkerService(config, daemon.deviceManager)
+
+	// Initialize configuration API server (port 8081)
+	daemon.configAPI = NewConfigAPIServer(daemon, 8081)
 
 	return daemon, nil
 }
@@ -192,6 +196,11 @@ func (d *Daemon) Start() error {
 		}
 	}
 
+	// Start configuration API server
+	if err := d.configAPI.Start(); err != nil {
+		return fmt.Errorf("failed to start configuration API: %w", err)
+	}
+
 	// Start worker service to connect to gateway via Hermes
 	if err := d.workerService.Start(); err != nil {
 		return fmt.Errorf("failed to start worker service: %w", err)
@@ -236,6 +245,11 @@ func (d *Daemon) Stop() error {
 
 	// Cancel context to signal shutdown
 	d.cancel()
+
+	// Stop configuration API server
+	if err := d.configAPI.Stop(); err != nil {
+		d.logger.Error().Err(err).Msg("Error stopping configuration API")
+	}
 
 	// Stop worker service
 	if err := d.workerService.Stop(); err != nil {

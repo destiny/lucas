@@ -65,7 +65,7 @@ func (api *APIServer) Start(address string) error {
 
 	// API routes
 	apiRouter := router.PathPrefix("/api/v1").Subrouter()
-
+	
 	// Gateway endpoints
 	apiRouter.HandleFunc("/gateway/status", api.handleGatewayStatus).Methods("GET")
 	apiRouter.HandleFunc("/gateway/keys/info", api.handleKeyInfo).Methods("GET")
@@ -73,7 +73,7 @@ func (api *APIServer) Start(address string) error {
 
 	// Hub registration endpoint
 	apiRouter.HandleFunc("/hub/register", api.handleHubRegister).Methods("POST")
-
+	
 	// Note: Hub claiming is now handled via JWT-protected /user/hubs/claim endpoint
 
 	// User endpoints (protected with JWT authentication)
@@ -81,9 +81,12 @@ func (api *APIServer) Start(address string) error {
 	apiRouter.HandleFunc("/users", api.handleCreateUser).Methods("POST") // Keep public for admin/demo purposes
 	apiRouter.Handle("/user/hubs", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleGetUserHubs))).Methods("GET")
 	apiRouter.Handle("/user/hubs/claim", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleUserHubClaim))).Methods("POST")
+	apiRouter.Handle("/user/hubs/{hub_id}/devices/configure", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleHubDeviceConfigure))).Methods("POST")
+	apiRouter.Handle("/user/hubs/{hub_id}/devices", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleGetHubDevices))).Methods("GET")
+	apiRouter.Handle("/user/hubs/{hub_id}/devices/reload", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleHubDeviceReload))).Methods("POST")
 	apiRouter.Handle("/user/devices", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleGetUserDevices))).Methods("GET")
 	apiRouter.Handle("/user/devices/{device_id}/action", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleDeviceAction))).Methods("POST")
-
+	
 	// Debug logging for route registration
 	api.logger.Info().Msg("User hub claim endpoint registered at /api/v1/user/hubs/claim")
 
@@ -144,12 +147,12 @@ func (api *APIServer) corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
+		
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-
+		
 		next.ServeHTTP(w, r)
 	})
 }
@@ -172,14 +175,14 @@ func (api *APIServer) sendError(w http.ResponseWriter, status int, message strin
 // Gateway endpoints
 func (api *APIServer) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 	stats := api.brokerService.GetServiceStats()
-
+	
 	status := map[string]interface{}{
-		"status":        "running",
-		"active_hubs":   getActiveHubCount(stats),
-		"uptime":        "N/A", // Could add uptime tracking
-		"version":       "1.0.0",
-		"timestamp":     time.Now().UTC().Format(time.RFC3339),
-		"service_stats": stats,
+		"status":            "running",
+		"active_hubs":       getActiveHubCount(stats),
+		"uptime":           "N/A", // Could add uptime tracking
+		"version":          "1.0.0",
+		"timestamp":        time.Now().UTC().Format(time.RFC3339),
+		"service_stats":    stats,
 	}
 
 	api.sendJSON(w, http.StatusOK, status)
@@ -246,7 +249,7 @@ func (api *APIServer) handleHubRegister(w http.ResponseWriter, r *http.Request) 
 			Str("product_key", req.ProductKey).
 			Err(err).
 			Msg("Failed to register hub")
-
+		
 		// Provide specific error messages for common failures
 		if strings.Contains(err.Error(), "already registered") {
 			api.sendError(w, http.StatusConflict, err.Error())
@@ -260,13 +263,13 @@ func (api *APIServer) handleHubRegister(w http.ResponseWriter, r *http.Request) 
 
 	// Return success response with gateway information
 	response := map[string]interface{}{
-		"success": true,
-		"message": "Hub registered successfully",
-		"hub":     hub,
+		"success":         true,
+		"message":         "Hub registered successfully",
+		"hub":             hub,
 		"gateway_info": map[string]interface{}{
-			"public_key":   api.keys.GetServerPublicKey(),
-			"zmq_endpoint": "tcp://localhost:5555", // Should be configurable
-			"api_endpoint": r.Host,
+			"public_key":    api.keys.GetServerPublicKey(),
+			"zmq_endpoint":  "tcp://localhost:5555", // Should be configurable
+			"api_endpoint":  r.Host,
 		},
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
@@ -281,7 +284,7 @@ func (api *APIServer) handleHubRegister(w http.ResponseWriter, r *http.Request) 
 // handleUserHubClaim handles hub claiming for authenticated users (JWT protected)
 func (api *APIServer) handleUserHubClaim(w http.ResponseWriter, r *http.Request) {
 	api.logger.Info().Msg("User hub claim request received")
-
+	
 	var req struct {
 		ProductKey string `json:"product_key"`
 	}
@@ -339,7 +342,7 @@ func (api *APIServer) handleUserHubClaim(w http.ResponseWriter, r *http.Request)
 				Int("user_id", user.ID).
 				Str("username", user.Username).
 				Msg("User attempted to claim already owned hub")
-
+			
 			response := map[string]interface{}{
 				"success":   true,
 				"message":   "Hub is already claimed by you",
@@ -373,7 +376,7 @@ func (api *APIServer) handleUserHubClaim(w http.ResponseWriter, r *http.Request)
 		Str("hub_name", hub.Name).
 		Bool("was_auto_registered", hub.AutoRegistered).
 		Msg("Proceeding to claim hub")
-
+	
 	// Claim the hub - update user_id and set auto_registered to false
 	if err := api.database.ClaimHub(hub.HubID, user.ID); err != nil {
 		api.logger.Error().
@@ -526,7 +529,7 @@ func (api *APIServer) handleDeviceAction(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Create device action using BrokerService
-	deviceAction := json.RawMessage(fmt.Sprintf(`{"type":"%s","action":"%s","parameters":%s}`,
+	deviceAction := json.RawMessage(fmt.Sprintf(`{"type":"%s","action":"%s","parameters":%s}`, 
 		actionReq.Type, actionReq.Action, mustMarshal(actionReq.Parameters)))
 
 	// Send device command via Hermes BrokerService
@@ -581,8 +584,8 @@ func (api *APIServer) handleListDevices(w http.ResponseWriter, r *http.Request) 
 // Health check
 func (api *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	health := map[string]interface{}{
-		"status":    "healthy",
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"status":     "healthy",
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
 		"components": map[string]string{
 			"database":       "healthy",
 			"broker_service": "healthy",
@@ -679,10 +682,10 @@ func (api *APIServer) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Msg("User registered successfully")
 
 	response := map[string]interface{}{
-		"success":   true,
-		"message":   "User registered successfully",
-		"user":      user,
-		"token":     token,
+		"success": true,
+		"message": "User registered successfully",
+		"user":    user,
+		"token":   token,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -770,10 +773,10 @@ func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Msg("User logged in successfully")
 
 	response := map[string]interface{}{
-		"success":   true,
-		"message":   "Login successful",
-		"user":      user,
-		"token":     token,
+		"success": true,
+		"message": "Login successful",
+		"user":    user,
+		"token":   token,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -788,9 +791,263 @@ func (api *APIServer) handleGetCurrentUser(w http.ResponseWriter, r *http.Reques
 	}
 
 	response := map[string]interface{}{
-		"success":   true,
-		"user":      user,
+		"success": true,
+		"user":    user,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	api.sendJSON(w, http.StatusOK, response)
+}
+
+// DeviceConfig represents a device configuration request
+type DeviceConfig struct {
+	ID           string   `json:"id"`
+	Type         string   `json:"type"`
+	Model        string   `json:"model"`
+	Address      string   `json:"address"`
+	Credential   string   `json:"credential"`
+	Capabilities []string `json:"capabilities"`
+}
+
+// HubDeviceConfigureRequest represents a device configuration request for a hub
+type HubDeviceConfigureRequest struct {
+	Devices []DeviceConfig `json:"devices"`
+}
+
+// handleHubDeviceConfigure handles device configuration requests for a specific hub
+func (api *APIServer) handleHubDeviceConfigure(w http.ResponseWriter, r *http.Request) {
+	user, ok := GetUserFromContext(r)
+	if !ok {
+		api.sendError(w, http.StatusUnauthorized, "User not found in context")
+		return
+	}
+
+	vars := mux.Vars(r)
+	hubID := vars["hub_id"]
+
+	api.logger.Info().
+		Int("user_id", user.ID).
+		Str("hub_id", hubID).
+		Msg("Hub device configuration request received")
+
+	// Verify user owns the hub
+	hub, err := api.database.GetHubByHubID(hubID)
+	if err != nil {
+		api.logger.Error().
+			Str("hub_id", hubID).
+			Err(err).
+			Msg("Hub not found")
+		api.sendError(w, http.StatusNotFound, "Hub not found")
+		return
+	}
+
+	if !hub.UserID.Valid || int(hub.UserID.Int32) != user.ID {
+		api.logger.Warn().
+			Int("user_id", user.ID).
+			Str("hub_id", hubID).
+			Msg("User attempted to configure devices for hub they don't own")
+		api.sendError(w, http.StatusForbidden, "You don't have permission to configure this hub")
+		return
+	}
+
+	// Parse request
+	var req HubDeviceConfigureRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.sendError(w, http.StatusBadRequest, "Invalid JSON format")
+		return
+	}
+
+	// Validate devices
+	if len(req.Devices) == 0 {
+		api.sendError(w, http.StatusBadRequest, "At least one device must be configured")
+		return
+	}
+
+	// NOTE: Direct HTTP calls to hubs violate KISS principle and Hermes messaging pattern
+	// This functionality should be implemented via ZMQ messaging through broker service
+	api.sendError(w, http.StatusNotImplemented, "Hub device configuration via direct HTTP not implemented - use ZMQ messaging")
+	return
+
+	configJSON, err := json.Marshal(configPayload)
+	if err != nil {
+		api.sendError(w, http.StatusInternalServerError, "Failed to marshal configuration")
+		return
+	}
+
+	// Send configuration to hub
+	resp, err := http.Post(hubConfigURL, "application/json", strings.NewReader(string(configJSON)))
+	if err != nil {
+		api.logger.Error().
+			Str("hub_id", hubID).
+			Err(err).
+			Msg("Failed to send configuration to hub")
+		api.sendError(w, http.StatusServiceUnavailable, "Failed to communicate with hub")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		api.logger.Error().
+			Str("hub_id", hubID).
+			Int("status_code", resp.StatusCode).
+			Msg("Hub rejected configuration")
+		api.sendError(w, http.StatusBadGateway, "Hub rejected the configuration")
+		return
+	}
+
+	// Parse hub response
+	var hubResponse map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&hubResponse); err != nil {
+		api.logger.Error().
+			Str("hub_id", hubID).
+			Err(err).
+			Msg("Failed to parse hub response")
+	}
+
+	api.logger.Info().
+		Int("user_id", user.ID).
+		Str("hub_id", hubID).
+		Int("device_count", len(req.Devices)).
+		Msg("Hub device configuration completed successfully")
+
+	response := map[string]interface{}{
+		"success":            true,
+		"message":            fmt.Sprintf("Successfully configured %d devices for hub %s", len(req.Devices), hubID),
+		"hub_id":            hubID,
+		"devices_configured": len(req.Devices),
+		"hub_response":      hubResponse,
+		"timestamp":         time.Now().UTC().Format(time.RFC3339),
+	}
+
+	api.sendJSON(w, http.StatusOK, response)
+}
+
+// handleGetHubDevices returns the current device configuration for a hub
+func (api *APIServer) handleGetHubDevices(w http.ResponseWriter, r *http.Request) {
+	user, ok := GetUserFromContext(r)
+	if !ok {
+		api.sendError(w, http.StatusUnauthorized, "User not found in context")
+		return
+	}
+
+	vars := mux.Vars(r)
+	hubID := vars["hub_id"]
+
+	// Verify user owns the hub
+	hub, err := api.database.GetHubByHubID(hubID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, "Hub not found")
+		return
+	}
+
+	if !hub.UserID.Valid || int(hub.UserID.Int32) != user.ID {
+		api.sendError(w, http.StatusForbidden, "You don't have permission to access this hub")
+		return
+	}
+
+	// NOTE: Direct HTTP calls to hubs violate KISS principle and Hermes messaging pattern
+	// This functionality should be implemented via ZMQ messaging through broker service
+	api.sendError(w, http.StatusNotImplemented, "Hub device listing via direct HTTP not implemented - use ZMQ messaging")
+	return
+	
+	resp, err := http.Get(hubDevicesURL)
+	if err != nil {
+		api.logger.Error().
+			Str("hub_id", hubID).
+			Err(err).
+			Msg("Failed to get devices from hub")
+		api.sendError(w, http.StatusServiceUnavailable, "Failed to communicate with hub")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		api.sendError(w, http.StatusBadGateway, "Hub failed to provide device list")
+		return
+	}
+
+	// Parse and forward hub response
+	var hubResponse map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&hubResponse); err != nil {
+		api.sendError(w, http.StatusInternalServerError, "Failed to parse hub response")
+		return
+	}
+
+	response := map[string]interface{}{
+		"success":   true,
+		"message":   "Hub devices retrieved successfully",
+		"hub_id":    hubID,
+		"data":      hubResponse["data"],
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	api.sendJSON(w, http.StatusOK, response)
+}
+
+// handleHubDeviceReload triggers a device reload on the hub
+func (api *APIServer) handleHubDeviceReload(w http.ResponseWriter, r *http.Request) {
+	user, ok := GetUserFromContext(r)
+	if !ok {
+		api.sendError(w, http.StatusUnauthorized, "User not found in context")
+		return
+	}
+
+	vars := mux.Vars(r)
+	hubID := vars["hub_id"]
+
+	// Verify user owns the hub
+	hub, err := api.database.GetHubByHubID(hubID)
+	if err != nil {
+		api.sendError(w, http.StatusNotFound, "Hub not found")
+		return
+	}
+
+	if !hub.UserID.Valid || int(hub.UserID.Int32) != user.ID {
+		api.sendError(w, http.StatusForbidden, "You don't have permission to reload this hub")
+		return
+	}
+
+	// NOTE: Direct HTTP calls to hubs violate KISS principle and Hermes messaging pattern  
+	// This functionality should be implemented via ZMQ messaging through broker service
+	api.sendError(w, http.StatusNotImplemented, "Hub device reload via direct HTTP not implemented - use ZMQ messaging")
+	return
+	
+	resp, err := http.Post(hubReloadURL, "application/json", strings.NewReader("{}"))
+	if err != nil {
+		api.logger.Error().
+			Str("hub_id", hubID).
+			Err(err).
+			Msg("Failed to send reload request to hub")
+		api.sendError(w, http.StatusServiceUnavailable, "Failed to communicate with hub")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		api.sendError(w, http.StatusBadGateway, "Hub failed to reload devices")
+		return
+	}
+
+	// Parse hub response
+	var hubResponse map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&hubResponse); err != nil {
+		api.logger.Error().
+			Str("hub_id", hubID).
+			Err(err).
+			Msg("Failed to parse hub reload response")
+	}
+
+	api.logger.Info().
+		Int("user_id", user.ID).
+		Str("hub_id", hubID).
+		Msg("Hub device reload completed successfully")
+
+	response := map[string]interface{}{
+		"success":      true,
+		"message":      fmt.Sprintf("Successfully reloaded devices for hub %s", hubID),
+		"hub_id":       hubID,
+		"hub_response": hubResponse,
+		"timestamp":    time.Now().UTC().Format(time.RFC3339),
 	}
 
 	api.sendJSON(w, http.StatusOK, response)
