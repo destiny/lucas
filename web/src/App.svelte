@@ -1,11 +1,13 @@
 <script lang="ts">
-    import {onMount} from 'svelte';
+    import { onMount } from 'svelte';
     import moment from 'moment';
     import { auth, apiClient } from './lib/auth';
     import LoginForm from './components/LoginForm.svelte';
     import RegisterForm from './components/RegisterForm.svelte';
     import Dashboard from './components/Dashboard.svelte';
     import RemoteControl from './components/RemoteControl.svelte';
+    
+    // Svelte 5 compatible - using traditional reactive statements for now
 
     // Types
     type AuthView = 'login' | 'register';
@@ -16,7 +18,7 @@
     let loading = true;
     let error: string | null = null;
 
-    // Authentication state
+    // Authentication state using Svelte 5 store integration
     $: authState = $auth;
     $: isAuthenticated = authState.isAuthenticated;
     $: authLoading = authState.isLoading;
@@ -49,7 +51,7 @@
         return `${year}.${weekNum}.${buildNum}`;
     }
 
-    $: appVersion = generateVersion();
+    let appVersion = generateVersion();
 
     async function fetchGatewayStatus() {
         try {
@@ -111,8 +113,8 @@
         currentMainView = 'dashboard';
     }
 
-    // Reactive statements
-    $: if (isAuthenticated && authState.token) {
+    // Watch for authentication changes
+    $: if (isAuthenticated && authState?.token) {
         fetchUserData();
     }
 

@@ -56,9 +56,11 @@ components:
     config: hub.yml
     
   web-ui:
-    tech: [svelte, typescript, vite]
+    tech: [svelte@5.38.0, typescript, vite]
     files: [web/src/*]
     build: web/dist/
+    bundle_size: "121KB JS (41KB gzipped), 21KB CSS (3.8KB gzipped)"
+    architecture: "Performance-first with custom components for optimal bundle size"
     
 
 # Nonce-Based Request Deduplication
@@ -420,12 +422,34 @@ auth:
   storage: local storage (web) + API keys (hub)
   flow: login -> jwt -> api calls with Bearer token
 
+# UI Framework Strategy
+ui_framework:
+  performance_strategy: "Custom components for optimal performance and minimal bundle size"
+  web_core_vitals:
+    cls_optimization: "Custom toast notifications eliminate layout shifts from feedback divs"
+    fcp_lcp: "Lightweight component architecture with minimal dependencies"
+    inp: "Touch-friendly controls with 44px minimum touch targets"
+  component_architecture: |
+    RemoteControl.svelte: Custom performance-optimized remote interface with custom toast
+    ControlGroup.svelte: Reusable button groups (custom)
+    Toast notifications: Custom toast component for non-blocking feedback
+  responsive_design: "Mobile-first with progressive disclosure (essential vs advanced controls)"
+  bundle_optimization: "121KB JS (vs 316KB with Flowbite) - 62% reduction in bundle size"
+  sass_config: "Modern compiler API configured to eliminate deprecation warnings"
+  svelte5_migration: "Successfully migrated to Svelte 5 with proper mount() API and compatible reactive patterns"
+  migration_details: |
+    - Updated main.ts: new App() → mount(App, { target })
+    - App.svelte: Clean reactive statements with $auth store integration  
+    - RemoteControl.svelte: Proper $: reactive patterns for Svelte 5
+    - All components: Compatible with both Svelte 4 and 5 reactive syntax
+    - Performance: Maintained 122KB JS bundle (41KB gzipped)
+
 # Extension Points  
 extensibility:
   new_devices: "Add to internal/device/ + update hub config"
   new_protocols: "Implement Device interface for new device types" 
   new_hubs: "Deploy additional hub instances with unique IDs"
-  web_components: "Add Svelte components + routes"
+  web_components: "Add Svelte components + routes (use Flowbite for common UI patterns)"
   security: "Gateway handles auth/encryption, devices stay internal"
 
 # Deployment

@@ -4,8 +4,21 @@ import sveltePreprocess from 'svelte-preprocess'
 
 export default defineConfig({
   plugins: [svelte({
-    preprocess: sveltePreprocess()
+    preprocess: sveltePreprocess({
+      scss: {
+        api: 'modern-compiler',
+        silenceDeprecations: ['legacy-js-api']
+      }
+    })
   })],
+  css: {
+    preprocessorOptions: {
+      scss: {
+        api: 'modern-compiler', // Fix Sass deprecation warning
+        silenceDeprecations: ['legacy-js-api'] // Temporary fallback
+      }
+    }
+  },
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
