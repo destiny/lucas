@@ -11,6 +11,9 @@ export default defineConfig({
       }
     })
   })],
+  esbuild: {
+    legalComments: 'none'
+  },
   css: {
     preprocessorOptions: {
       scss: {
