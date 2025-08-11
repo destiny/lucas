@@ -467,7 +467,7 @@ func (hsh *HubServiceHandler) handleListAction(req *hermes.ServiceRequest) (*her
 	hsh.logger.Info().
 		Str("hub_id", hsh.config.Hub.ID).
 		Str("message_id", req.MessageID).
-		Msg("[DEBUG] Hub received device list request")
+		Msg("Hub received device list request")
 	
 	// Get all devices managed by this hub
 	devices := make([]interface{}, 0)
@@ -477,7 +477,7 @@ func (hsh *HubServiceHandler) handleListAction(req *hermes.ServiceRequest) (*her
 			Str("device_id", deviceConfig.ID).
 			Str("device_type", deviceConfig.Type).
 			Str("device_address", deviceConfig.Address).
-			Msg("[DEBUG] Processing device from config")
+			Msg("Processing device from config")
 		
 		// Create device data from static config only - don't call device network operations
 		// Device list should work regardless of device online/offline status
@@ -498,7 +498,7 @@ func (hsh *HubServiceHandler) handleListAction(req *hermes.ServiceRequest) (*her
 			Str("device_model", deviceConfig.Model).
 			Str("device_address", deviceConfig.Address).
 			Interface("capabilities", deviceConfig.Capabilities).
-			Msg("[DEBUG] Hub sending device data")
+			Msg("Hub sending device data")
 		
 		devices = append(devices, completeDeviceInfo)
 	}
@@ -513,12 +513,12 @@ func (hsh *HubServiceHandler) handleListAction(req *hermes.ServiceRequest) (*her
 		Str("hub_id", hsh.config.Hub.ID).
 		Int("device_count", len(devices)).
 		Interface("response_data", responseData).
-		Msg("[DEBUG] Hub sending device list response")
+		Msg("Hub sending device list response")
 
 	hsh.logger.Info().
 		Str("request_message_id", req.MessageID).
 		Str("request_service", req.Service).
-		Msg("[DEBUG] Hub creating response with message ID from request")
+		Msg("Hub creating response with message ID from request")
 
 	return hermes.CreateServiceResponseWithNonce(
 		req.MessageID,

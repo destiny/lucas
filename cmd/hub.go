@@ -139,9 +139,20 @@ var hubStatusCmd = &cobra.Command{
 	Short: "Check hub daemon status",
 	Long:  `Check the status of the running hub daemon.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// TODO: Implement status checking via IPC or API
-		cmd.Println("Hub status checking not yet implemented.")
-		cmd.Println("This would connect to a running hub daemon to check its status.")
+		cmd.Println("Hub Status Check")
+		cmd.Println("===============")
+		cmd.Println()
+		cmd.Println("To check if hub daemon is running:")
+		cmd.Printf("  ps aux | grep 'lucas hub'\n")
+		cmd.Println()
+		cmd.Println("To check hub configuration:")
+		cmd.Printf("  lucas hub config validate --config %s\n", hubConfigPath)
+		cmd.Println()
+		cmd.Println("To check hub logs:")
+		cmd.Println("  Check daemon output or system logs where hub was started")
+		cmd.Println()
+		cmd.Println("For detailed status, check gateway dashboard at:")
+		cmd.Println("  http://gateway:8080 (if gateway is running)")
 		return nil
 	},
 }

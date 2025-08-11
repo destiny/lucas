@@ -256,7 +256,7 @@ func (w *HermesWorker) messageLoop() {
 					continue
 				}
 				
-				w.logger.Error().Err(err).Msg("[HUB_DEBUG] Worker failed to receive message from broker")
+				w.logger.Error().Err(err).Msg("Worker failed to receive message from broker")
 				w.reconnectToBroker()
 				continue
 			}
@@ -264,7 +264,7 @@ func (w *HermesWorker) messageLoop() {
 			w.logger.Debug().
 				Int("message_parts", len(msg)).
 				Str("service", w.service).
-				Msg("[HUB_DEBUG] Worker received message from broker")
+				Msg("Worker received message from broker")
 
 			if len(msg) < 2 {
 				w.logger.Warn().
@@ -346,7 +346,7 @@ func (w *HermesWorker) handleRequest(clientID string, body []byte, extraParts []
 		Int("request_num", requestNum).
 		Int("body_size", len(body)).
 		Str("service", w.service).
-		Msg("[HUB_DEBUG] Worker processing service request")
+		Msg("Worker processing service request")
 
 	// Use body from extra parts if available (for large messages)
 	requestBody := body
@@ -401,7 +401,7 @@ func (w *HermesWorker) handleRequest(clientID string, body []byte, extraParts []
 		Int("request_num", requestNum).
 		Int("response_size", len(response)).
 		Str("service", w.service).
-		Msg("[HUB_DEBUG] Worker request processed successfully, sending reply")
+		Msg("Worker request processed successfully, sending reply")
 
 	return nil
 }

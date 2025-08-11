@@ -598,7 +598,7 @@ func (b *Broker) handleClientRequest(clientID string, msg *ClientMessage) error 
 				Str("service", msg.Service).
 				Str("hub_worker_id", hubWorker.Identity).
 				Str("message_id", msg.MessageID).
-				Msg("[HUB_DEBUG] Routing request directly to hub worker")
+				Msg("Routing request directly to hub worker")
 			return b.sendToWorker(hubWorker.Identity, clientID, msg.Body)
 		} else {
 			// Hub worker not available
@@ -606,7 +606,7 @@ func (b *Broker) handleClientRequest(clientID string, msg *ClientMessage) error 
 				Str("client_id", clientID).
 				Str("service", msg.Service).
 				Str("message_id", msg.MessageID).
-				Msg("[HUB_DEBUG] Hub worker not available")
+				Msg("Hub worker not available")
 			errorResp := CreateServiceResponse(msg.MessageID, msg.Service, false, nil, 
 				fmt.Errorf("hub worker not available"))
 			respBytes, _ := SerializeServiceResponse(errorResp)

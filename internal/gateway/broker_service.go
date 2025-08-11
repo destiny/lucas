@@ -383,7 +383,7 @@ func (bs *BrokerService) SendDeviceCommand(hubID, deviceID string, action json.R
 			Str("nonce", nonce).
 			Str("message_id", messageID).
 			Err(err).
-			Msg("[HUB_DEBUG] Device command failed to send")
+			Msg("Device command failed to send")
 		return nil, fmt.Errorf("failed to send device command: %w", err)
 	}
 
@@ -405,7 +405,7 @@ func (bs *BrokerService) SendDeviceCommand(hubID, deviceID string, action json.R
 		Str("hub_id", hubID).
 		Str("device_id", deviceID).
 		Str("nonce", nonce).
-		Msg("[HUB_DEBUG] Device command sent successfully")
+		Msg("Device command sent successfully")
 
 	return dataBytes, nil
 }
@@ -577,7 +577,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 		Bool("success", serviceResp.Success).
 		Str("message_id", serviceResp.MessageID).
 		Interface("data", serviceResp.Data).
-		Msg("[DEBUG] Gateway parsed service response")
+		Msg("Gateway parsed service response")
 
 	if !serviceResp.Success {
 		bs.logger.Error().
@@ -626,7 +626,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 	bs.logger.Debug().
 		Str("hub_id", hubID).
 		Interface("data_map", dataMap).
-		Msg("[DEBUG] Gateway extracted data map")
+		Msg("Gateway extracted data map")
 
 	// Check if the data contains error information instead of device list
 	if errorMsg, hasError := dataMap["error"]; hasError {
@@ -660,7 +660,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 	bs.logger.Debug().
 		Str("hub_id", hubID).
 		Str("devices_type", fmt.Sprintf("%T", devicesData)).
-		Msg("[DEBUG] Gateway found devices field")
+		Msg("Gateway found devices field")
 
 	devicesSlice, ok := devicesData.([]interface{})
 	if !ok {
@@ -674,7 +674,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 	bs.logger.Info().
 		Str("hub_id", hubID).
 		Int("devices_count", len(devicesSlice)).
-		Msg("[DEBUG] Gateway found devices array")
+		Msg("Gateway found devices array")
 
 	// Register each device
 	deviceCount := 0
@@ -723,7 +723,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 			Str("device_address", deviceAddress).
 			Interface("capabilities", capabilities).
 			Int("hub_db_id", hub.ID).
-			Msg("[DEBUG] Gateway creating device in database")
+			Msg("Gateway creating device in database")
 
 		// Create device in database
 		device, err := bs.database.CreateDevice(
@@ -748,7 +748,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 			Str("hub_id", hubID).
 			Str("device_id", deviceID).
 			Int("device_db_id", device.ID).
-			Msg("[DEBUG] Gateway successfully created device in database")
+			Msg("Gateway successfully created device in database")
 
 		// Update device status - default to online since hub is connected
 		finalStatus := "online"

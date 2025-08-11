@@ -863,12 +863,10 @@ func (api *APIServer) handleHubDeviceConfigure(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Forward configuration to hub via HTTP API (assuming hub runs on port 8081)
-	hubConfigURL := fmt.Sprintf("http://localhost:8081/devices/configure") // TODO: Use actual hub address
-	
-	configPayload := map[string]interface{}{
-		"devices": req.Devices,
-	}
+	// NOTE: Direct HTTP calls to hubs violate KISS principle and Hermes messaging pattern
+	// This functionality should be implemented via ZMQ messaging through broker service
+	api.sendError(w, http.StatusNotImplemented, "Hub device configuration via direct HTTP not implemented - use ZMQ messaging")
+	return
 
 	configJSON, err := json.Marshal(configPayload)
 	if err != nil {
@@ -947,8 +945,10 @@ func (api *APIServer) handleGetHubDevices(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Get device list from hub
-	hubDevicesURL := fmt.Sprintf("http://localhost:8081/devices/list") // TODO: Use actual hub address
+	// NOTE: Direct HTTP calls to hubs violate KISS principle and Hermes messaging pattern
+	// This functionality should be implemented via ZMQ messaging through broker service
+	api.sendError(w, http.StatusNotImplemented, "Hub device listing via direct HTTP not implemented - use ZMQ messaging")
+	return
 	
 	resp, err := http.Get(hubDevicesURL)
 	if err != nil {
@@ -1007,8 +1007,10 @@ func (api *APIServer) handleHubDeviceReload(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Send reload request to hub
-	hubReloadURL := fmt.Sprintf("http://localhost:8081/devices/reload") // TODO: Use actual hub address
+	// NOTE: Direct HTTP calls to hubs violate KISS principle and Hermes messaging pattern  
+	// This functionality should be implemented via ZMQ messaging through broker service
+	api.sendError(w, http.StatusNotImplemented, "Hub device reload via direct HTTP not implemented - use ZMQ messaging")
+	return
 	
 	resp, err := http.Post(hubReloadURL, "application/json", strings.NewReader("{}"))
 	if err != nil {

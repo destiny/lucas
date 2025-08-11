@@ -213,7 +213,7 @@ func (c *HermesClient) RequestWithTimeout(service string, body []byte, timeout t
 		Int("body_size", len(body)).
 		Dur("timeout", timeout).
 		Int("pending_requests", len(c.pending)).
-		Msg("[HUB_DEBUG] Sending request to service")
+		Msg("Sending request to service")
 
 	// Create pending request
 	pending := &PendingClientRequest{
@@ -261,7 +261,7 @@ func (c *HermesClient) RequestWithTimeout(service string, body []byte, timeout t
 				Dur("latency", latency).
 				Int("response_size", len(response)).
 				Int("attempt", attempt).
-				Msg("[HUB_DEBUG] Received successful response")
+				Msg("Received successful response")
 			
 			// Clean up pending request
 			c.mutex.Lock()
@@ -514,14 +514,14 @@ func (c *HermesClient) messageLoop() {
 					time.Sleep(10 * time.Millisecond)
 					continue
 				} else {
-					c.logger.Error().Err(err).Msg("[HUB_DEBUG] Failed to receive message from broker")
+					c.logger.Error().Err(err).Msg("Failed to receive message from broker")
 				}
 				continue
 			}
 
 			c.logger.Debug().
 				Int("message_parts", len(msg)).
-				Msg("[HUB_DEBUG] Client received message from broker")
+				Msg("Client received message from broker")
 
 			if len(msg) < 2 {
 				c.logger.Warn().
