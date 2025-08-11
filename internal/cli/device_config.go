@@ -26,19 +26,19 @@ const (
 
 // DeviceConfigModel handles the device configuration screen
 type DeviceConfigModel struct {
-	configManager   *ConfigManager
-	devices         []hub.DeviceConfig
-	selectedDevice  int
-	editingDevice   *hub.DeviceConfig
-	focusedField    deviceConfigField
-	editMode        bool
-	addMode         bool
-	testMode        bool
-	errorMessage    string
-	successMessage  string
-	width           int
-	height          int
-	
+	configManager  *ConfigManager
+	devices        []hub.DeviceConfig
+	selectedDevice int
+	editingDevice  *hub.DeviceConfig
+	focusedField   deviceConfigField
+	editMode       bool
+	addMode        bool
+	testMode       bool
+	errorMessage   string
+	successMessage string
+	width          int
+	height         int
+
 	// Input field cursors and states
 	idCursor           int
 	typeCursor         int
@@ -46,7 +46,7 @@ type DeviceConfigModel struct {
 	addressCursor      int
 	credentialCursor   int
 	capabilitiesCursor int
-	
+
 	// Available device types
 	deviceTypes []string
 	typeIndex   int
@@ -55,16 +55,16 @@ type DeviceConfigModel struct {
 // NewDeviceConfigModel creates a new device configuration model
 func NewDeviceConfigModel(configPath string) DeviceConfigModel {
 	configManager := NewConfigManager(configPath)
-	
+
 	model := DeviceConfigModel{
 		configManager: configManager,
 		deviceTypes:   configManager.GetSupportedDeviceTypes(),
 		devices:       []hub.DeviceConfig{},
 	}
-	
+
 	// Load devices
 	model.loadDevices()
-	
+
 	return model
 }
 
@@ -95,7 +95,7 @@ func (m DeviceConfigModel) Update(msg tea.Msg) (DeviceConfigModel, tea.Cmd) {
 		// Clear messages on any key press
 		m.errorMessage = ""
 		m.successMessage = ""
-		
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			if m.editMode || m.addMode {
@@ -193,11 +193,11 @@ func (m DeviceConfigModel) renderListView() string {
 
 	// Device list
 	if len(m.devices) == 0 {
-		sections = append(sections, 
+		sections = append(sections,
 			lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render("No devices configured"))
 	} else {
 		sections = append(sections, subtitleStyle.Render("Configured Devices:"))
-		
+
 		for i, device := range m.devices {
 			cursor := "  "
 			if i == m.selectedDevice {
@@ -227,7 +227,7 @@ func (m DeviceConfigModel) renderListView() string {
 	if len(m.devices) > 0 {
 		helpItems = []string{
 			"↑/↓: Navigate",
-			"a: Add device", 
+			"a: Add device",
 			"e: Edit device",
 			"d: Delete device",
 			"t: Test device",
@@ -337,7 +337,7 @@ func (m DeviceConfigModel) renderEditView() string {
 
 	// Action buttons
 	sections = append(sections, "")
-	
+
 	saveStyle := buttonStyle
 	if m.focusedField == deviceConfigFieldSave {
 		saveStyle = buttonActiveStyle
@@ -649,7 +649,7 @@ func (m *DeviceConfigModel) syncCursors() {
 	if m.editingDevice == nil {
 		return
 	}
-	
+
 	switch m.focusedField {
 	case deviceConfigFieldID:
 		m.idCursor = len(m.editingDevice.ID)
@@ -860,7 +860,7 @@ func insertText(text string, position int, insert string) string {
 	if position > len(text) {
 		position = len(text)
 	}
-	
+
 	return text[:position] + insert + text[position:]
 }
 
@@ -868,7 +868,7 @@ func deleteCharAt(text string, position int) string {
 	if position < 0 || position >= len(text) {
 		return text
 	}
-	
+
 	return text[:position] + text[position+1:]
 }
 
@@ -876,18 +876,18 @@ func renderTextWithCursor(text string, cursor int, showCursor bool) string {
 	if !showCursor {
 		return text
 	}
-	
+
 	if cursor < 0 {
 		cursor = 0
 	}
 	if cursor > len(text) {
 		cursor = len(text)
 	}
-	
+
 	if cursor == len(text) {
 		return text + "█"
 	}
-	
+
 	return text[:cursor] + "█" + text[cursor+1:]
 }
 

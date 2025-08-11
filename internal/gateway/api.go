@@ -51,7 +51,7 @@ func (api *APIServer) Start(address string) error {
 
 	// API routes
 	apiRouter := router.PathPrefix("/api/v1").Subrouter()
-	
+
 	// Gateway endpoints
 	apiRouter.HandleFunc("/gateway/status", api.handleGatewayStatus).Methods("GET")
 	apiRouter.HandleFunc("/gateway/keys/info", api.handleKeyInfo).Methods("GET")
@@ -59,7 +59,7 @@ func (api *APIServer) Start(address string) error {
 
 	// Hub registration endpoint
 	apiRouter.HandleFunc("/hub/register", api.handleHubRegister).Methods("POST")
-	
+
 	// Note: Hub claiming is now handled via JWT-protected /user/hubs/claim endpoint
 
 	// User endpoints (protected with JWT authentication)
@@ -69,7 +69,7 @@ func (api *APIServer) Start(address string) error {
 	apiRouter.Handle("/user/hubs/claim", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleUserHubClaim))).Methods("POST")
 	apiRouter.Handle("/user/devices", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleGetUserDevices))).Methods("GET")
 	apiRouter.Handle("/user/devices/{device_id}/action", api.authMiddleware.RequireAuth(http.HandlerFunc(api.handleDeviceAction))).Methods("POST")
-	
+
 	// Debug logging for route registration
 	api.logger.Info().Msg("User hub claim endpoint registered at /api/v1/user/hubs/claim")
 
@@ -130,12 +130,12 @@ func (api *APIServer) corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		
+
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -158,14 +158,14 @@ func (api *APIServer) sendError(w http.ResponseWriter, status int, message strin
 // Gateway endpoints
 func (api *APIServer) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 	stats := api.brokerService.GetServiceStats()
-	
+
 	status := map[string]interface{}{
-		"status":            "running",
-		"active_hubs":       getActiveHubCount(stats),
-		"uptime":           "N/A", // Could add uptime tracking
-		"version":          "1.0.0",
-		"timestamp":        time.Now().UTC().Format(time.RFC3339),
-		"service_stats":    stats,
+		"status":        "running",
+		"active_hubs":   getActiveHubCount(stats),
+		"uptime":        "N/A", // Could add uptime tracking
+		"version":       "1.0.0",
+		"timestamp":     time.Now().UTC().Format(time.RFC3339),
+		"service_stats": stats,
 	}
 
 	api.sendJSON(w, http.StatusOK, status)
@@ -232,7 +232,7 @@ func (api *APIServer) handleHubRegister(w http.ResponseWriter, r *http.Request) 
 			Str("product_key", req.ProductKey).
 			Err(err).
 			Msg("Failed to register hub")
-		
+
 		// Provide specific error messages for common failures
 		if strings.Contains(err.Error(), "already registered") {
 			api.sendError(w, http.StatusConflict, err.Error())
@@ -246,13 +246,13 @@ func (api *APIServer) handleHubRegister(w http.ResponseWriter, r *http.Request) 
 
 	// Return success response with gateway information
 	response := map[string]interface{}{
-		"success":         true,
-		"message":         "Hub registered successfully",
-		"hub":             hub,
+		"success": true,
+		"message": "Hub registered successfully",
+		"hub":     hub,
 		"gateway_info": map[string]interface{}{
-			"public_key":    api.keys.GetServerPublicKey(),
-			"zmq_endpoint":  "tcp://localhost:5555", // Should be configurable
-			"api_endpoint":  r.Host,
+			"public_key":   api.keys.GetServerPublicKey(),
+			"zmq_endpoint": "tcp://localhost:5555", // Should be configurable
+			"api_endpoint": r.Host,
 		},
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
@@ -267,7 +267,7 @@ func (api *APIServer) handleHubRegister(w http.ResponseWriter, r *http.Request) 
 // handleUserHubClaim handles hub claiming for authenticated users (JWT protected)
 func (api *APIServer) handleUserHubClaim(w http.ResponseWriter, r *http.Request) {
 	api.logger.Info().Msg("User hub claim request received")
-	
+
 	var req struct {
 		ProductKey string `json:"product_key"`
 	}
@@ -325,7 +325,7 @@ func (api *APIServer) handleUserHubClaim(w http.ResponseWriter, r *http.Request)
 				Int("user_id", user.ID).
 				Str("username", user.Username).
 				Msg("User attempted to claim already owned hub")
-			
+
 			response := map[string]interface{}{
 				"success":   true,
 				"message":   "Hub is already claimed by you",
@@ -359,7 +359,7 @@ func (api *APIServer) handleUserHubClaim(w http.ResponseWriter, r *http.Request)
 		Str("hub_name", hub.Name).
 		Bool("was_auto_registered", hub.AutoRegistered).
 		Msg("Proceeding to claim hub")
-	
+
 	// Claim the hub - update user_id and set auto_registered to false
 	if err := api.database.ClaimHub(hub.HubID, user.ID); err != nil {
 		api.logger.Error().
@@ -512,7 +512,7 @@ func (api *APIServer) handleDeviceAction(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Create device action using BrokerService
-	deviceAction := json.RawMessage(fmt.Sprintf(`{"type":"%s","action":"%s","parameters":%s}`, 
+	deviceAction := json.RawMessage(fmt.Sprintf(`{"type":"%s","action":"%s","parameters":%s}`,
 		actionReq.Type, actionReq.Action, mustMarshal(actionReq.Parameters)))
 
 	// Send device command via Hermes BrokerService
@@ -567,8 +567,8 @@ func (api *APIServer) handleListDevices(w http.ResponseWriter, r *http.Request) 
 // Health check
 func (api *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	health := map[string]interface{}{
-		"status":     "healthy",
-		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+		"status":    "healthy",
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
 		"components": map[string]string{
 			"database":       "healthy",
 			"broker_service": "healthy",
@@ -665,10 +665,10 @@ func (api *APIServer) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Msg("User registered successfully")
 
 	response := map[string]interface{}{
-		"success": true,
-		"message": "User registered successfully",
-		"user":    user,
-		"token":   token,
+		"success":   true,
+		"message":   "User registered successfully",
+		"user":      user,
+		"token":     token,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -756,10 +756,10 @@ func (api *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Msg("User logged in successfully")
 
 	response := map[string]interface{}{
-		"success": true,
-		"message": "Login successful",
-		"user":    user,
-		"token":   token,
+		"success":   true,
+		"message":   "Login successful",
+		"user":      user,
+		"token":     token,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -774,8 +774,8 @@ func (api *APIServer) handleGetCurrentUser(w http.ResponseWriter, r *http.Reques
 	}
 
 	response := map[string]interface{}{
-		"success": true,
-		"user":    user,
+		"success":   true,
+		"user":      user,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
 

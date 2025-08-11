@@ -24,11 +24,9 @@ const (
 	Confirm BraviaRemoteCode = "AAAAAQAAAAEAAABlAw=="
 
 	// Menu Controls
-	Home    BraviaRemoteCode = "AAAAAQAAAAEAAABgAw=="
-	Menu    BraviaRemoteCode = "AAAAAQAAAAEAAAAbAw==" // Require to update that is not work
-	Options BraviaRemoteCode = "AAAAAgAAAAEAAAA2Aw=="
-	Return  BraviaRemoteCode = "AAAAAgAAAJcAAAAjAw=="
-	Back    BraviaRemoteCode = "AAAAAQAAAAEAAABjAw=="
+	Home BraviaRemoteCode = "AAAAAQAAAAEAAABgAw=="
+	Menu BraviaRemoteCode = "AAAAAQAAAAEAAAAbAw==" // Require to update that is not work
+	Back BraviaRemoteCode = "AAAAAQAAAAEAAABjAw=="
 
 	// Input Controls
 	Input BraviaRemoteCode = "AAAAAQAAAAEAAAAlAw=="
@@ -36,13 +34,6 @@ const (
 	HDMI2 BraviaRemoteCode = "AAAAAgAAAAEAAABpAw=="
 	HDMI3 BraviaRemoteCode = "AAAAAgAAAAEAAABqAw=="
 	HDMI4 BraviaRemoteCode = "AAAAAgAAAAEAAABrAw=="
-
-	// Playback Controls
-	Play        BraviaRemoteCode = "AAAAAgAAAAEAAAAaAw=="
-	Pause       BraviaRemoteCode = "AAAAAgAAAAEAAAAZAw=="
-	Stop        BraviaRemoteCode = "AAAAAgAAAAEAAAAYAw=="
-	Rewind      BraviaRemoteCode = "AAAAAgAAAAEAAAAbAw=="
-	FastForward BraviaRemoteCode = "AAAAAgAAAAEAAAAcAw=="
 
 	// Number Keys
 	Num0 BraviaRemoteCode = "AAAAAQAAAAEAAAAJAw=="
@@ -71,34 +62,18 @@ const (
 // API Methods for Sony Bravia Control
 const (
 	// System Methods
-	GetPowerStatus             BraviaMethod = "getPowerStatus"
-	SetPowerStatus             BraviaMethod = "setPowerStatus"
-	GetSystemInformation       BraviaMethod = "getSystemInformation"
-	GetSystemSupportedFunction BraviaMethod = "getSystemSupportedFunction"
+	GetPowerStatus       BraviaMethod = "getPowerStatus"
+	GetSystemInformation BraviaMethod = "getSystemInformation"
 
 	// Audio Methods
 	GetVolumeInformation BraviaMethod = "getVolumeInformation"
 	SetAudioVolume       BraviaMethod = "setAudioVolume"
 	SetAudioMute         BraviaMethod = "setAudioMute"
-	GetSpeakerSettings   BraviaMethod = "getSpeakerSettings"
-	SetSpeakerSettings   BraviaMethod = "setSpeakerSettings"
 
 	// AV Content Methods
 	GetPlayingContentInfo BraviaMethod = "getPlayingContentInfo"
 	GetContentList        BraviaMethod = "getContentList"
-	GetSchemeList         BraviaMethod = "getSchemeList"
-	GetSourceList         BraviaMethod = "getSourceList"
-	SetPlayContent        BraviaMethod = "setPlayContent"
 
 	// App Control Methods
-	GetApplicationList   BraviaMethod = "getApplicationList"
-	GetApplicationStatus BraviaMethod = "getApplicationStatus"
-	SetActiveApp         BraviaMethod = "setActiveApp"
-	TerminateApps        BraviaMethod = "terminateApps"
-
-	// Video Screen Methods
-	GetBannerMode   BraviaMethod = "getBannerMode"
-	SetBannerMode   BraviaMethod = "setBannerMode"
-	GetSceneSetting BraviaMethod = "getSceneSetting"
-	SetSceneSetting BraviaMethod = "setSceneSetting"
+	GetApplicationList BraviaMethod = "getApplicationList"
 )

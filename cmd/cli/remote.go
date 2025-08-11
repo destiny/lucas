@@ -47,11 +47,6 @@ type RemoteModel struct {
 	maxLogLines int
 }
 
-// NewRemoteModel creates a new remote control screen model
-func NewRemoteModel(dev device.Device, info device.DeviceInfo) RemoteModel {
-	return NewRemoteModelWithFlags(dev, info, false, false)
-}
-
 // NewRemoteModelWithFlags creates a new remote control screen model with flags
 func NewRemoteModelWithFlags(dev device.Device, info device.DeviceInfo, debug, test bool) RemoteModel {
 	return RemoteModel{
@@ -155,7 +150,7 @@ func (m RemoteModel) View() string {
 	}
 
 	// Fixed 3-line Log Display (if debug or test mode)
-	if (m.debugMode || m.testMode) {
+	if m.debugMode || m.testMode {
 		logDisplay := m.renderLogDisplay()
 		if logDisplay != "" {
 			sections = append(sections, logDisplay)
@@ -231,7 +226,7 @@ func (m RemoteModel) renderHorizontalRemoteLayout() string {
 	navHeader := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#50FA7B")).
 		Render("Power & Navigation:")
-	
+
 	navColumnWithHeader := lipgloss.JoinVertical(lipgloss.Center,
 		navHeader,
 		navColumn,
@@ -274,60 +269,60 @@ func (m RemoteModel) renderLogDisplay() string {
 
 	// Always show exactly 3 lines
 	maxLines := 3
-	
+
 	// Get last 3 log entries
 	start := 0
 	if len(m.logBuffer) > maxLines {
 		start = len(m.logBuffer) - maxLines
 	}
-	
+
 	var logLines []string
-	
+
 	// Log header with auto-scroll indicator
 	hasMoreLogs := len(m.logBuffer) > maxLines
 	autoScrollIcon := ""
 	if hasMoreLogs {
 		autoScrollIcon = " ↓" // Shows auto-scroll is active
 	}
-	
+
 	header := fmt.Sprintf("─── LOGS%s ───", autoScrollIcon)
 	logLines = append(logLines, lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#6272A4")).
 		Render(header))
-		
+
 	// Show exactly 3 log lines (pad with empty if needed)
 	for i := 0; i < maxLines; i++ {
 		if start+i < len(m.logBuffer) {
 			entry := m.logBuffer[start+i]
 			timestamp := entry.Timestamp.Format("15:04:05")
-			
+
 			var levelStyle lipgloss.Style
 			switch entry.Level {
 			case "ERR":
 				levelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555"))
-			case "DBG":  
+			case "DBG":
 				levelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4"))
 			default: // INF
 				levelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B"))
 			}
-			
-			logLine := fmt.Sprintf("%s [%s] %s", 
+
+			logLine := fmt.Sprintf("%s [%s] %s",
 				timestamp,
 				levelStyle.Render(entry.Level),
 				entry.Message)
-				
+
 			// Truncate long lines to fit
 			if len(logLine) > 70 {
 				logLine = logLine[:67] + "..."
 			}
-			
+
 			logLines = append(logLines, logLine)
 		} else {
 			// Empty line to maintain 3-line height
 			logLines = append(logLines, "")
 		}
 	}
-	
+
 	return strings.Join(logLines, "\n")
 }
 
@@ -339,9 +334,9 @@ func (m *RemoteModel) addLogEntry(level, message, action string) {
 		Message:   message,
 		Action:    action,
 	}
-	
+
 	m.logBuffer = append(m.logBuffer, entry)
-	
+
 	// Keep only the most recent entries
 	if len(m.logBuffer) > 20 { // Keep more in buffer than we display
 		m.logBuffer = m.logBuffer[1:]
@@ -464,7 +459,7 @@ func (m RemoteModel) handleRemoteButton(button remoteButton) (RemoteModel, tea.C
 	if m.debugMode || m.testMode {
 		var logLevel string
 		var logMessage string
-		
+
 		if response.Success {
 			logLevel = "INF"
 			if m.testMode {
@@ -476,7 +471,7 @@ func (m RemoteModel) handleRemoteButton(button remoteButton) (RemoteModel, tea.C
 			logLevel = "ERR"
 			logMessage = fmt.Sprintf("%s failed: %s", actionName, response.Error)
 		}
-		
+
 		m.addLogEntry(logLevel, logMessage, actionName)
 	}
 
@@ -540,14 +535,4 @@ func (m RemoteModel) handleNumberKey(key string) (RemoteModel, tea.Cmd) {
 	}
 
 	return m.handleRemoteButton(button)
-}
-
-// GetActionHistory returns the action history
-func (m RemoteModel) GetActionHistory() []actionHistoryEntry {
-	return m.actionHistory
-}
-
-// GetLastResponse returns the last response
-func (m RemoteModel) GetLastResponse() *device.ActionResponse {
-	return m.lastResponse
 }

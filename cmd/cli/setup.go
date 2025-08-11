@@ -78,13 +78,6 @@ func NewSetupModelWithFlags(debug, test bool) SetupModel {
 	}
 }
 
-// NewSetupModelWithConfig creates a new setup screen model with config path
-func NewSetupModelWithConfig(debug, test bool, configPath string) SetupModel {
-	model := NewSetupModelWithFlags(debug, test)
-	model.configPath = configPath
-	return model
-}
-
 // Update handles setup screen messages
 func (m SetupModel) Update(msg tea.Msg) (SetupModel, tea.Cmd) {
 	switch msg := msg.(type) {

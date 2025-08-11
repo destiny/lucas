@@ -2,6 +2,7 @@ package bravia_test
 
 import (
 	"encoding/json"
+	"lucas/internal"
 	"lucas/internal/device"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,8 @@ import (
 
 func TestNewBraviaRemote(t *testing.T) {
 	t.Run("creates BraviaRemote with proper device info", func(t *testing.T) {
-		remote := bravia.NewBraviaRemote("192.168.1.100:80", "test-psk", false)
+		opts := &internal.FnModeOptions{Debug: false, Test: false}
+		remote := bravia.NewBraviaRemote("192.168.1.100:80", "test-psk", opts)
 
 		assert.NotNil(t, remote)
 
@@ -40,7 +42,7 @@ func TestBraviaRemote_Process_RemoteActions(t *testing.T) {
 		defer server.Close()
 
 		address := strings.TrimPrefix(server.URL, "http://")
-		remote := bravia.NewBraviaRemote(address, "test-credential", false)
+		remote := bravia.NewBraviaRemote(address, "test-credential", &internal.FnModeOptions{Debug: false, Test: false})
 
 		actionJSON := `{
 			"type": "remote",
@@ -62,7 +64,7 @@ func TestBraviaRemote_Process_RemoteActions(t *testing.T) {
 		defer server.Close()
 
 		address := strings.TrimPrefix(server.URL, "http://")
-		remote := bravia.NewBraviaRemote(address, "test-credential", false)
+		remote := bravia.NewBraviaRemote(address, "test-credential", &internal.FnModeOptions{Debug: false, Test: false})
 
 		actionJSON := `{
 			"type": "remote",
@@ -75,7 +77,7 @@ func TestBraviaRemote_Process_RemoteActions(t *testing.T) {
 	})
 
 	t.Run("handles unsupported remote action", func(t *testing.T) {
-		remote := bravia.NewBraviaRemote("localhost:80", "test", false)
+		remote := bravia.NewBraviaRemote("localhost:80", "test", &internal.FnModeOptions{Debug: false, Test: false})
 
 		actionJSON := `{
 			"type": "remote",
@@ -96,7 +98,7 @@ func TestBraviaRemote_Process_RemoteActions(t *testing.T) {
 		defer server.Close()
 
 		address := strings.TrimPrefix(server.URL, "http://")
-		remote := bravia.NewBraviaRemote(address, "test-credential", false)
+		remote := bravia.NewBraviaRemote(address, "test-credential", &internal.FnModeOptions{Debug: false, Test: false})
 
 		actionJSON := `{
 			"type": "remote",
@@ -130,7 +132,7 @@ func TestBraviaRemote_Process_ControlActions(t *testing.T) {
 		defer server.Close()
 
 		address := strings.TrimPrefix(server.URL, "http://")
-		remote := bravia.NewBraviaRemote(address, "test-credential", false)
+		remote := bravia.NewBraviaRemote(address, "test-credential", &internal.FnModeOptions{Debug: false, Test: false})
 
 		actionJSON := `{
 			"type": "control",
@@ -162,7 +164,7 @@ func TestBraviaRemote_Process_ControlActions(t *testing.T) {
 		defer server.Close()
 
 		address := strings.TrimPrefix(server.URL, "http://")
-		remote := bravia.NewBraviaRemote(address, "test-credential", false)
+		remote := bravia.NewBraviaRemote(address, "test-credential", &internal.FnModeOptions{Debug: false, Test: false})
 
 		actionJSON := `{
 			"type": "control",
@@ -178,7 +180,7 @@ func TestBraviaRemote_Process_ControlActions(t *testing.T) {
 	})
 
 	t.Run("handles missing required parameters for set_volume", func(t *testing.T) {
-		remote := bravia.NewBraviaRemote("localhost:80", "test", false)
+		remote := bravia.NewBraviaRemote("localhost:80", "test", &internal.FnModeOptions{Debug: false, Test: false})
 
 		actionJSON := `{
 			"type": "control",
@@ -192,7 +194,7 @@ func TestBraviaRemote_Process_ControlActions(t *testing.T) {
 	})
 
 	t.Run("handles unsupported control action", func(t *testing.T) {
-		remote := bravia.NewBraviaRemote("localhost:80", "test", false)
+		remote := bravia.NewBraviaRemote("localhost:80", "test", &internal.FnModeOptions{Debug: false, Test: false})
 
 		actionJSON := `{
 			"type": "control",
@@ -208,7 +210,7 @@ func TestBraviaRemote_Process_ControlActions(t *testing.T) {
 
 func TestBraviaRemote_Process_ErrorHandling(t *testing.T) {
 	t.Run("handles invalid JSON", func(t *testing.T) {
-		remote := bravia.NewBraviaRemote("localhost:80", "test", false)
+		remote := bravia.NewBraviaRemote("localhost:80", "test", &internal.FnModeOptions{Debug: false, Test: false})
 
 		invalidJSON := `{"type": "remote", "action": }`
 
@@ -219,7 +221,7 @@ func TestBraviaRemote_Process_ErrorHandling(t *testing.T) {
 	})
 
 	t.Run("handles missing action type", func(t *testing.T) {
-		remote := bravia.NewBraviaRemote("localhost:80", "test", false)
+		remote := bravia.NewBraviaRemote("localhost:80", "test", &internal.FnModeOptions{Debug: false, Test: false})
 
 		actionJSON := `{
 			"action": "power"
@@ -232,7 +234,7 @@ func TestBraviaRemote_Process_ErrorHandling(t *testing.T) {
 	})
 
 	t.Run("handles missing action", func(t *testing.T) {
-		remote := bravia.NewBraviaRemote("localhost:80", "test", false)
+		remote := bravia.NewBraviaRemote("localhost:80", "test", &internal.FnModeOptions{Debug: false, Test: false})
 
 		actionJSON := `{
 			"type": "remote"
@@ -245,7 +247,7 @@ func TestBraviaRemote_Process_ErrorHandling(t *testing.T) {
 	})
 
 	t.Run("handles unsupported action type", func(t *testing.T) {
-		remote := bravia.NewBraviaRemote("localhost:80", "test", false)
+		remote := bravia.NewBraviaRemote("localhost:80", "test", &internal.FnModeOptions{Debug: false, Test: false})
 
 		actionJSON := `{
 			"type": "unknown_type",
@@ -261,7 +263,7 @@ func TestBraviaRemote_Process_ErrorHandling(t *testing.T) {
 
 func TestBraviaRemote_DeviceInterface(t *testing.T) {
 	t.Run("implements Device interface", func(t *testing.T) {
-		remote := bravia.NewBraviaRemote("localhost:80", "test", false)
+		remote := bravia.NewBraviaRemote("localhost:80", "test", &internal.FnModeOptions{Debug: false, Test: false})
 
 		// Test that BraviaRemote implements Device interface
 		var device device.Device = remote

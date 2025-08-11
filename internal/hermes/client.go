@@ -14,50 +14,50 @@ import (
 
 // PendingClientRequest represents a pending client request
 type PendingClientRequest struct {
-	MessageID string
-	Service   string
-	Body      []byte
-	Response  chan []byte
-	Error     chan error
-	Timestamp time.Time
-	Timeout   time.Duration
-	Nonce     string    // Add nonce for correlation
-	FireAndForget bool  // If true, don't wait for response
+	MessageID     string
+	Service       string
+	Body          []byte
+	Response      chan []byte
+	Error         chan error
+	Timestamp     time.Time
+	Timeout       time.Duration
+	Nonce         string // Add nonce for correlation
+	FireAndForget bool   // If true, don't wait for response
 }
 
 // ClientStats represents client statistics
 type ClientStats struct {
-	RequestsSent     int       `json:"requests_sent"`
+	RequestsSent      int       `json:"requests_sent"`
 	ResponsesReceived int       `json:"responses_received"`
-	RequestsFailed   int       `json:"requests_failed"`
-	RequestsTimeout  int       `json:"requests_timeout"`
-	LastRequest      time.Time `json:"last_request"`
-	LastResponse     time.Time `json:"last_response"`
-	StartTime        time.Time `json:"start_time"`
-	AverageLatency   float64   `json:"average_latency_ms"`
+	RequestsFailed    int       `json:"requests_failed"`
+	RequestsTimeout   int       `json:"requests_timeout"`
+	LastRequest       time.Time `json:"last_request"`
+	LastResponse      time.Time `json:"last_response"`
+	StartTime         time.Time `json:"start_time"`
+	AverageLatency    float64   `json:"average_latency_ms"`
 }
 
 // HermesClient implements the Hermes Majordomo Protocol client
 type HermesClient struct {
-	broker       string
-	identity     string
-	socket       *zmq4.Socket
-	timeout      time.Duration
-	retries      int
-	pending      map[string]*PendingClientRequest  // Keyed by message ID
+	broker        string
+	identity      string
+	socket        *zmq4.Socket
+	timeout       time.Duration
+	retries       int
+	pending       map[string]*PendingClientRequest // Keyed by message ID
 	pendingNonces map[string]*PendingClientRequest // Keyed by nonce for optional correlation
-	ctx          context.Context
-	cancel       context.CancelFunc
-	logger       zerolog.Logger
-	stats        *ClientStats
-	mutex        sync.RWMutex
-	latencies    []time.Duration
+	ctx           context.Context
+	cancel        context.CancelFunc
+	logger        zerolog.Logger
+	stats         *ClientStats
+	mutex         sync.RWMutex
+	latencies     []time.Duration
 }
 
 // NewClient creates a new Hermes client
 func NewClient(broker, identity string) *HermesClient {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	return &HermesClient{
 		broker:        broker,
 		identity:      identity,
@@ -192,7 +192,7 @@ func (c *HermesClient) Request(service string, body []byte) ([]byte, error) {
 // RequestWithTimeout sends a synchronous request with custom timeout
 func (c *HermesClient) RequestWithTimeout(service string, body []byte, timeout time.Duration) ([]byte, error) {
 	messageID := GenerateMessageID()
-	
+
 	c.logger.Debug().
 		Str("service", service).
 		Str("message_id", messageID).
@@ -239,21 +239,21 @@ func (c *HermesClient) RequestWithTimeout(service string, body []byte, timeout t
 			// Calculate and store latency
 			latency := time.Since(pending.Timestamp)
 			c.recordLatency(latency)
-			
+
 			c.logger.Debug().
 				Str("service", service).
 				Str("message_id", messageID).
 				Dur("latency", latency).
 				Int("response_size", len(response)).
 				Msg("Received response")
-			
+
 			// Clean up pending request
 			c.mutex.Lock()
 			delete(c.pending, messageID)
 			c.stats.ResponsesReceived++
 			c.stats.LastResponse = time.Now()
 			c.mutex.Unlock()
-			
+
 			return response, nil
 		case err := <-pending.Error:
 			lastError = err
@@ -303,7 +303,7 @@ func (c *HermesClient) RequestWithTimeout(service string, body []byte, timeout t
 // RequestAsync sends an asynchronous request to a service
 func (c *HermesClient) RequestAsync(service string, body []byte, callback func([]byte, error)) error {
 	messageID := GenerateMessageID()
-	
+
 	c.logger.Debug().
 		Str("service", service).
 		Str("message_id", messageID).
@@ -350,12 +350,12 @@ func (c *HermesClient) RequestAsync(service string, body []byte, callback func([
 			// Calculate and store latency
 			latency := time.Since(pending.Timestamp)
 			c.recordLatency(latency)
-			
+
 			c.mutex.Lock()
 			c.stats.ResponsesReceived++
 			c.stats.LastResponse = time.Now()
 			c.mutex.Unlock()
-			
+
 			callback(response, nil)
 		case err := <-pending.Error:
 			c.mutex.Lock()
@@ -379,7 +379,7 @@ func (c *HermesClient) RequestAsync(service string, body []byte, callback func([
 // Uses nonce-based correlation for optional response matching
 func (c *HermesClient) RequestFireAndForget(service string, body []byte, nonce string) error {
 	messageID := GenerateMessageID()
-	
+
 	c.logger.Debug().
 		Str("service", service).
 		Str("message_id", messageID).
@@ -506,7 +506,7 @@ func (c *HermesClient) messageLoop() {
 				continue
 			}
 
-			empty := msg[0] // Should be empty frame
+			empty := msg[0]    // Should be empty frame
 			response := msg[1] // Response body
 
 			if len(empty) != 0 {
@@ -566,7 +566,7 @@ func (c *HermesClient) handleServiceResponse(resp *ServiceResponse) error {
 				Str("nonce", resp.Nonce).
 				Bool("fire_and_forget", noncePending.FireAndForget).
 				Msg("Matched response using nonce correlation")
-			
+
 			// For fire-and-forget requests, just log and cleanup
 			if noncePending.FireAndForget {
 				c.mutex.Lock()
@@ -574,14 +574,14 @@ func (c *HermesClient) handleServiceResponse(resp *ServiceResponse) error {
 				c.stats.ResponsesReceived++
 				c.stats.LastResponse = time.Now()
 				c.mutex.Unlock()
-				
+
 				c.logger.Debug().
 					Str("nonce", resp.Nonce).
 					Bool("success", resp.Success).
 					Msg("Received response for fire-and-forget request")
 				return nil
 			}
-			
+
 			// For regular async requests with nonce, use nonce pending request
 			pending = noncePending
 			exists = true
@@ -672,7 +672,7 @@ func (c *HermesClient) cleanupTimeoutRequests() {
 		if pending, exists := c.pending[messageID]; exists {
 			delete(c.pending, messageID)
 			c.stats.RequestsTimeout++
-			
+
 			// Notify waiting request of timeout
 			select {
 			case pending.Error <- fmt.Errorf("request timeout"):

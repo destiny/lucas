@@ -24,15 +24,15 @@ type BrokerService struct {
 
 // BrokerWorker represents a worker in the broker
 type BrokerWorker struct {
-	Identity    string
-	Service     string
-	Address     string
-	Expiry      time.Time
-	LastPing    time.Time
-	Status      string
-	Liveness    int
-	Requests    int
-	mutex       sync.RWMutex
+	Identity string
+	Service  string
+	Address  string
+	Expiry   time.Time
+	LastPing time.Time
+	Status   string
+	Liveness int
+	Requests int
+	mutex    sync.RWMutex
 }
 
 // BrokerPendingRequest represents a pending client request
@@ -46,24 +46,24 @@ type BrokerPendingRequest struct {
 
 // Broker implements the Hermes Majordomo Protocol broker
 type Broker struct {
-	address     string
-	socket      *zmq4.Socket
-	services    map[string]*BrokerService
-	workers     map[string]*BrokerWorker
-	clients     map[string]time.Time
-	heartbeat   time.Duration
-	ctx         context.Context
-	cancel      context.CancelFunc
-	logger      zerolog.Logger
-	stats       *BrokerStats
-	mutex       sync.RWMutex
+	address       string
+	socket        *zmq4.Socket
+	services      map[string]*BrokerService
+	workers       map[string]*BrokerWorker
+	clients       map[string]time.Time
+	heartbeat     time.Duration
+	ctx           context.Context
+	cancel        context.CancelFunc
+	logger        zerolog.Logger
+	stats         *BrokerStats
+	mutex         sync.RWMutex
 	brokerService interface{} // Reference to gateway broker service for immediate device requests
 }
 
 // NewBroker creates a new Hermes broker
 func NewBroker(address string) *Broker {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	return &Broker{
 		address:   address,
 		services:  make(map[string]*BrokerService),
@@ -97,7 +97,7 @@ func (b *Broker) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to create ROUTER socket: %w", err)
 	}
-	
+
 	defer func() {
 		if err != nil {
 			socket.Close()
@@ -180,9 +180,9 @@ func (b *Broker) messageLoop() {
 			}
 
 			sender := string(msg[0])
-			empty := msg[1]   // Should be empty frame
-			header := msg[2]  // Protocol header
-			
+			empty := msg[1]  // Should be empty frame
+			header := msg[2] // Protocol header
+
 			if len(empty) != 0 {
 				b.logger.Warn().
 					Str("sender", sender).
@@ -193,7 +193,7 @@ func (b *Broker) messageLoop() {
 			b.logger.Debug().
 				Str("sender", sender).
 				Int("parts_count", len(msg)).
-				Str("header_preview", string(header[:min(50, len(header))]) + "...").
+				Str("header_preview", string(header[:min(50, len(header))])+"...").
 				Msg("Received message")
 
 			// Route message based on sender type and content
@@ -344,12 +344,12 @@ func (b *Broker) handleWorkerReply(workerID, clientID string, reply []byte) erro
 			Str("worker_id", workerID).
 			Str("client_id", clientID).
 			Msg("Received reply from unknown worker - forwarding to client and requesting re-registration")
-		
+
 		// Send reply to client anyway (client is waiting for this)
 		if err := b.sendToClient(clientID, reply); err != nil {
 			return fmt.Errorf("failed to send reply from unknown worker to client: %w", err)
 		}
-		
+
 		// Request worker re-registration for future messages
 		return b.sendReregistrationRequest(workerID)
 	}
@@ -367,7 +367,7 @@ func (b *Broker) handleWorkerReply(workerID, clientID string, reply []byte) erro
 		// Parse the response to determine if it's actually a device list response
 		// Device list responses should have specific characteristics
 		isDeviceListResponse := false
-		
+
 		// Try to parse the response to check if it's a device list
 		var serviceResp ServiceResponse
 		if err := json.Unmarshal(reply, &serviceResp); err == nil {
@@ -379,7 +379,7 @@ func (b *Broker) handleWorkerReply(workerID, clientID string, reply []byte) erro
 						isDeviceListResponse = true
 					}
 				}
-				
+
 				// Additional check: if response has error data typical of action responses, not device list
 				if !isDeviceListResponse {
 					// Action error responses typically have "success": false and error messages
@@ -403,13 +403,13 @@ func (b *Broker) handleWorkerReply(workerID, clientID string, reply []byte) erro
 				}
 			}
 		}
-		
+
 		if isDeviceListResponse {
 			b.logger.Info().
 				Str("hub_id", workerID).
 				Int("response_size", len(reply)).
 				Msg("Received immediate device list response from hub")
-			
+
 			// Process device list response via broker service
 			if b.brokerService != nil {
 				if bs, ok := b.brokerService.(interface {
@@ -444,7 +444,7 @@ func (b *Broker) handleWorkerHeartbeat(workerID string) error {
 		b.logger.Warn().
 			Str("worker_id", workerID).
 			Msg("Received heartbeat from unknown worker - requesting re-registration")
-		
+
 		// Send a re-registration request back to the worker
 		// The worker should respond with a READY message
 		return b.sendReregistrationRequest(workerID)
@@ -559,7 +559,7 @@ func (b *Broker) handleClientRequest(clientID string, msg *ClientMessage) error 
 
 	if !exists {
 		// Service doesn't exist, send error to client
-		errorResp := CreateServiceResponse(msg.MessageID, msg.Service, false, nil, 
+		errorResp := CreateServiceResponse(msg.MessageID, msg.Service, false, nil,
 			fmt.Errorf("service not available: %s", msg.Service))
 		respBytes, _ := SerializeServiceResponse(errorResp)
 		return b.sendToClient(clientID, respBytes)
@@ -796,7 +796,7 @@ func (b *Broker) GetServices() map[string]*ServiceInfo {
 		for i, worker := range service.Workers {
 			workers[i] = worker.Identity
 		}
-		
+
 		serviceInfo := &ServiceInfo{
 			Name:        service.Name,
 			Description: service.Description,
@@ -858,7 +858,7 @@ func (b *Broker) sendImmediateDeviceListRequest(hubID string) {
 	// Create device list request
 	serviceReq := ServiceRequest{
 		MessageID: GenerateMessageID(),
-		Service:   "hub.control", 
+		Service:   "hub.control",
 		Action:    "list",
 		Payload:   json.RawMessage(`{}`),
 	}

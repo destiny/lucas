@@ -15,18 +15,18 @@ import (
 
 // BrokerService integrates Hermes broker with gateway functionality
 type BrokerService struct {
-	broker       *hermes.Broker
-	registry     *ServiceRegistry
-	database     *Database
-	keys         *GatewayKeys
-	logger       zerolog.Logger
-	ctx          context.Context
-	cancel       context.CancelFunc
-	hubHandlers  map[string]*HubServiceHandler
-	mutex        sync.RWMutex
+	broker      *hermes.Broker
+	registry    *ServiceRegistry
+	database    *Database
+	keys        *GatewayKeys
+	logger      zerolog.Logger
+	ctx         context.Context
+	cancel      context.CancelFunc
+	hubHandlers map[string]*HubServiceHandler
+	mutex       sync.RWMutex
 	// Single persistent client for all gateway-hub communication
-	client       *hermes.HermesClient
-	clientMutex  sync.Mutex
+	client      *hermes.HermesClient
+	clientMutex sync.Mutex
 }
 
 // ServiceRegistry manages device services and their providers
@@ -37,33 +37,33 @@ type ServiceRegistry struct {
 
 // DeviceService represents a type of device service
 type DeviceService struct {
-	Name         string              `json:"name"`
-	DeviceType   string              `json:"device_type"`
-	Description  string              `json:"description"`
-	Capabilities []string            `json:"capabilities"`
-	Providers    []*ServiceProvider  `json:"providers"`
-	LastSeen     time.Time           `json:"last_seen"`
-	RequestCount int                 `json:"request_count"`
+	Name         string             `json:"name"`
+	DeviceType   string             `json:"device_type"`
+	Description  string             `json:"description"`
+	Capabilities []string           `json:"capabilities"`
+	Providers    []*ServiceProvider `json:"providers"`
+	LastSeen     time.Time          `json:"last_seen"`
+	RequestCount int                `json:"request_count"`
 }
 
 // ServiceProvider represents a hub providing a service
 type ServiceProvider struct {
-	HubID       string                 `json:"hub_id"`
-	Identity    string                 `json:"identity"`
-	Address     string                 `json:"address,omitempty"`
-	Health      ServiceHealth          `json:"health"`
-	LastSeen    time.Time              `json:"last_seen"`
-	Requests    int                    `json:"requests"`
-	Devices     []ServiceDeviceInfo    `json:"devices"`
+	HubID    string              `json:"hub_id"`
+	Identity string              `json:"identity"`
+	Address  string              `json:"address,omitempty"`
+	Health   ServiceHealth       `json:"health"`
+	LastSeen time.Time           `json:"last_seen"`
+	Requests int                 `json:"requests"`
+	Devices  []ServiceDeviceInfo `json:"devices"`
 }
 
 // ServiceHealth represents the health status of a service provider
 type ServiceHealth struct {
-	Status      string    `json:"status"`
-	LastCheck   time.Time `json:"last_check"`
-	Latency     float64   `json:"latency_ms"`
-	ErrorRate   float64   `json:"error_rate"`
-	Uptime      float64   `json:"uptime_percent"`
+	Status    string    `json:"status"`
+	LastCheck time.Time `json:"last_check"`
+	Latency   float64   `json:"latency_ms"`
+	ErrorRate float64   `json:"error_rate"`
+	Uptime    float64   `json:"uptime_percent"`
 }
 
 // ServiceDeviceInfo represents device information for a service
@@ -87,7 +87,7 @@ type HubServiceHandler struct {
 // NewBrokerService creates a new broker service
 func NewBrokerService(address string, keys *GatewayKeys, database *Database) *BrokerService {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	bs := &BrokerService{
 		broker:      hermes.NewBroker(address),
 		registry:    NewServiceRegistry(),
@@ -98,12 +98,12 @@ func NewBrokerService(address string, keys *GatewayKeys, database *Database) *Br
 		cancel:      cancel,
 		hubHandlers: make(map[string]*HubServiceHandler),
 	}
-	
+
 	// Initialize persistent client for all gateway-hub communication
 	// Use standardized client ID from jargon specification
 	clientAddress := bs.convertBrokerAddressToClient(address)
 	bs.client = hermes.NewClient(clientAddress, "gateway_main")
-	
+
 	return bs
 }
 
@@ -245,7 +245,7 @@ func (bs *BrokerService) UnregisterHub(hubID string) error {
 // RegisterDeviceService registers a device service from a hub
 func (bs *BrokerService) RegisterDeviceService(hubID, deviceType string, devices []ServiceDeviceInfo) error {
 	serviceName := fmt.Sprintf("device.%s", deviceType)
-	
+
 	bs.logger.Debug().
 		Str("hub_id", hubID).
 		Str("service", serviceName).
@@ -307,29 +307,29 @@ func (bs *BrokerService) SendDeviceCommand(hubID, deviceID string, action json.R
 
 	// Always route through hub.control (single hub worker)
 	serviceName := "hub.control"
-	
+
 	// Create device command that hub will route internally
 	deviceCommand := map[string]interface{}{
 		"device_id": deviceID,
 		"action":    json.RawMessage(action),
 	}
-	
+
 	deviceCommandBytes, err := json.Marshal(deviceCommand)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal device command: %w", err)
 	}
-	
+
 	// Generate simple nonce for request deduplication
 	nonce := hermes.GenerateNonce()
-	
+
 	bs.logger.Debug().
 		Str("hub_id", hubID).
 		Str("device_id", deviceID).
 		Str("nonce", nonce).
 		Msg("Generated simple nonce for device command")
-	
+
 	messageID := hermes.GenerateMessageID()
-	
+
 	deviceRequest := hermes.ServiceRequest{
 		MessageID: messageID,
 		Service:   serviceName,
@@ -337,7 +337,7 @@ func (bs *BrokerService) SendDeviceCommand(hubID, deviceID string, action json.R
 		Payload:   json.RawMessage(deviceCommandBytes),
 		Nonce:     nonce,
 	}
-	
+
 	bs.logger.Debug().
 		Str("hub_id", hubID).
 		Str("device_id", deviceID).
@@ -355,7 +355,7 @@ func (bs *BrokerService) SendDeviceCommand(hubID, deviceID string, action json.R
 	// This provides immediate response to user and handles responses asynchronously
 	bs.clientMutex.Lock()
 	defer bs.clientMutex.Unlock()
-	
+
 	if bs.client == nil {
 		return nil, fmt.Errorf("persistent client not initialized")
 	}
@@ -398,12 +398,12 @@ func (bs *BrokerService) GetServiceStats() map[string]interface{} {
 
 	return map[string]interface{}{
 		"broker": map[string]interface{}{
-			"services":      brokerStats.Services,
-			"workers":       brokerStats.Workers,
-			"requests":      brokerStats.Requests,
-			"responses":     brokerStats.Responses,
-			"start_time":    brokerStats.StartTime,
-			"last_request":  brokerStats.LastRequest,
+			"services":     brokerStats.Services,
+			"workers":      brokerStats.Workers,
+			"requests":     brokerStats.Requests,
+			"responses":    brokerStats.Responses,
+			"start_time":   brokerStats.StartTime,
+			"last_request": brokerStats.LastRequest,
 		},
 		"services": services,
 		"workers":  workers,
@@ -510,7 +510,6 @@ func (bs *BrokerService) processHubWorkerRegistration(hubID, serviceName string)
 		Msg("Hub registered successfully - device list will be requested via broker")
 }
 
-
 // convertBrokerAddressToClient converts broker bind address to client connection address
 func (bs *BrokerService) convertBrokerAddressToClient(brokerAddr string) string {
 	// Convert bind addresses to client connection addresses
@@ -522,7 +521,7 @@ func (bs *BrokerService) convertBrokerAddressToClient(brokerAddr string) string 
 		// Replace 0.0.0.0 with localhost
 		return strings.Replace(brokerAddr, "0.0.0.0", "localhost", 1)
 	}
-	
+
 	// Return as-is for other addresses
 	return brokerAddr
 }
@@ -540,7 +539,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 
 	// Ensure hub is registered in gateway database
 	bs.processHubWorkerRegistration(hubID, "hub.control")
-		
+
 	// Parse service response
 	var serviceResp hermes.ServiceResponse
 	if err := json.Unmarshal(response, &serviceResp); err != nil {
@@ -706,13 +705,13 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 
 		// Create device in database
 		device, err := bs.database.CreateDevice(
-			hub.ID,          // hub database ID
-			deviceID,        // device ID from hub
-			deviceType,      // device type
-			deviceName,      // device name
-			deviceModel,     // device model
-			deviceAddress,   // device address
-			capabilities,    // device capabilities
+			hub.ID,        // hub database ID
+			deviceID,      // device ID from hub
+			deviceType,    // device type
+			deviceName,    // device name
+			deviceModel,   // device model
+			deviceAddress, // device address
+			capabilities,  // device capabilities
 		)
 		if err != nil {
 			bs.logger.Error().
@@ -734,7 +733,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 		if deviceStatus != "" && deviceStatus != "unknown" {
 			finalStatus = deviceStatus
 		}
-		
+
 		if err := bs.database.UpdateDeviceStatus(deviceID, finalStatus); err != nil {
 			bs.logger.Warn().
 				Str("hub_id", hubID).
@@ -773,7 +772,6 @@ func (bs *BrokerService) cleanupStaleServices() {
 	bs.registry.RemoveStaleServices(cutoff)
 }
 
-
 // extractCapabilities extracts unique capabilities from devices
 func extractCapabilities(devices []ServiceDeviceInfo) []string {
 	capabilitySet := make(map[string]bool)
@@ -782,12 +780,12 @@ func extractCapabilities(devices []ServiceDeviceInfo) []string {
 			capabilitySet[cap] = true
 		}
 	}
-	
+
 	capabilities := make([]string, 0, len(capabilitySet))
 	for cap := range capabilitySet {
 		capabilities = append(capabilities, cap)
 	}
-	
+
 	return capabilities
 }
 
@@ -819,7 +817,7 @@ func (sr *ServiceRegistry) GetService(serviceName string) (*DeviceService, bool)
 func (sr *ServiceRegistry) ListServices() map[string]*DeviceService {
 	sr.mutex.RLock()
 	defer sr.mutex.RUnlock()
-	
+
 	services := make(map[string]*DeviceService)
 	for name, service := range sr.services {
 		serviceCopy := *service
@@ -832,7 +830,7 @@ func (sr *ServiceRegistry) ListServices() map[string]*DeviceService {
 func (sr *ServiceRegistry) RemoveHubServices(hubID string) {
 	sr.mutex.Lock()
 	defer sr.mutex.Unlock()
-	
+
 	for serviceName, service := range sr.services {
 		// Remove hub from providers
 		newProviders := make([]*ServiceProvider, 0, len(service.Providers))
@@ -842,7 +840,7 @@ func (sr *ServiceRegistry) RemoveHubServices(hubID string) {
 			}
 		}
 		service.Providers = newProviders
-		
+
 		// Remove service if no providers left
 		if len(service.Providers) == 0 {
 			delete(sr.services, serviceName)
@@ -854,7 +852,7 @@ func (sr *ServiceRegistry) RemoveHubServices(hubID string) {
 func (sr *ServiceRegistry) UpdateServiceHealth(serviceName string, healthy bool) {
 	sr.mutex.Lock()
 	defer sr.mutex.Unlock()
-	
+
 	if service, exists := sr.services[serviceName]; exists {
 		service.LastSeen = time.Now()
 		for _, provider := range service.Providers {
@@ -872,7 +870,7 @@ func (sr *ServiceRegistry) UpdateServiceHealth(serviceName string, healthy bool)
 func (sr *ServiceRegistry) RemoveStaleServices(cutoff time.Time) {
 	sr.mutex.Lock()
 	defer sr.mutex.Unlock()
-	
+
 	for serviceName, service := range sr.services {
 		if service.LastSeen.Before(cutoff) {
 			delete(sr.services, serviceName)
@@ -884,25 +882,25 @@ func (sr *ServiceRegistry) RemoveStaleServices(cutoff time.Time) {
 func (sr *ServiceRegistry) GetStats() map[string]interface{} {
 	sr.mutex.RLock()
 	defer sr.mutex.RUnlock()
-	
+
 	totalProviders := 0
 	totalDevices := 0
 	servicesByType := make(map[string]int)
-	
+
 	for _, service := range sr.services {
 		totalProviders += len(service.Providers)
 		servicesByType[service.DeviceType]++
-		
+
 		for _, provider := range service.Providers {
 			totalDevices += len(provider.Devices)
 		}
 	}
-	
+
 	return map[string]interface{}{
-		"total_services":    len(sr.services),
-		"total_providers":   totalProviders,
-		"total_devices":     totalDevices,
-		"services_by_type":  servicesByType,
+		"total_services":   len(sr.services),
+		"total_providers":  totalProviders,
+		"total_devices":    totalDevices,
+		"services_by_type": servicesByType,
 	}
 }
 

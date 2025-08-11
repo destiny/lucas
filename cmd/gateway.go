@@ -17,12 +17,12 @@ import (
 )
 
 var (
-	gatewayConfigPath string
-	gatewayDBPath     string
-	gatewayKeysPath   string
-	gatewayZMQAddr    string
-	gatewayAPIAddr    string
-	gatewayDebugFlag  bool
+	gatewayConfigPath    string
+	gatewayDBPath        string
+	gatewayKeysPath      string
+	gatewayZMQAddr       string
+	gatewayAPIAddr       string
+	gatewayDebugFlag     bool
 	gatewayVerboseStatus bool
 )
 
@@ -115,11 +115,11 @@ The gateway provides a central point for managing distributed IoT devices across
 
 		// Shutdown services
 		log.Info().Msg("Shutting down gateway services")
-		
+
 		if err := brokerService.Stop(); err != nil {
 			log.Error().Err(err).Msg("Error stopping Broker service")
 		}
-		
+
 		if err := apiServer.Stop(); err != nil {
 			log.Error().Err(err).Msg("Error stopping API server")
 		}
@@ -150,7 +150,7 @@ var gatewayKeysGenerateCmd = &cobra.Command{
 		if _, err := os.Stat(keysPath); err == nil {
 			cmd.Printf("Keys already exist at: %s\n", keysPath)
 			cmd.Print("Do you want to overwrite them? [y/N]: ")
-			
+
 			var response string
 			fmt.Scanln(&response)
 			if response != "y" && response != "Y" {
@@ -234,11 +234,11 @@ var gatewayInitCmd = &cobra.Command{
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
 			cmd.Printf("Creating default configuration: %s\n", configPath)
 			config := gateway.NewDefaultGatewayConfig()
-			
+
 			if err := gateway.SaveGatewayConfig(config, configPath); err != nil {
 				return fmt.Errorf("failed to save config file: %w", err)
 			}
-			
+
 			cmd.Printf("✓ Configuration file created: %s\n", configPath)
 		} else {
 			cmd.Printf("✓ Configuration file already exists: %s\n", configPath)
@@ -349,7 +349,7 @@ func loadGatewayConfiguration() (*gateway.GatewayConfig, error) {
 func setupLogging(config *gateway.GatewayConfig) {
 	logger.SetSilentMode(false)
 	logger.SetLevel(config.Logging.Level)
-	
+
 	// Additional logging setup could be done here based on config.Logging.Format, etc.
 }
 
@@ -394,7 +394,7 @@ func checkGatewayStatus(cmd *cobra.Command) error {
 	// Try to get gateway status
 	statusURL := apiAddr + "/api/v1/gateway/status"
 	healthURL := apiAddr + "/api/v1/health"
-	
+
 	statusResp, statusErr := makeHTTPRequest(client, statusURL)
 	healthResp, healthErr := makeHTTPRequest(client, healthURL)
 
@@ -463,7 +463,7 @@ func makeHTTPRequest(client *http.Client, url string) (map[string]interface{}, e
 func displayCompactStatus(cmd *cobra.Command, config *gateway.GatewayConfig, configPath string, statusResp, healthResp map[string]interface{}, statusErr, healthErr error) error {
 	// Determine overall status
 	isOnline := statusErr == nil && healthErr == nil
-	
+
 	if isOnline {
 		cmd.Printf("Gateway Status: ✓ RUNNING\n")
 	} else {
@@ -505,7 +505,7 @@ func displayCompactStatus(cmd *cobra.Command, config *gateway.GatewayConfig, con
 					if statusStr != "healthy" {
 						icon = "✗"
 					}
-					cmd.Printf("%s: %s %s\n", strings.Title(component), icon, strings.Title(statusStr))
+					cmd.Printf("%s: %s %s\n", titleCase(component), icon, titleCase(statusStr))
 				}
 			}
 		}
@@ -544,3 +544,11 @@ func displayVerboseStatus(cmd *cobra.Command, config *gateway.GatewayConfig, con
 }
 
 // Gateway command initialization moved to root.go to avoid circular import issues
+
+// titleCase converts a string to title case (capitalize first letter)
+func titleCase(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + strings.ToLower(s[1:])
+}

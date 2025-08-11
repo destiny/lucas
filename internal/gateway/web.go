@@ -15,6 +15,7 @@ import (
 //go:generate cp -r ../../web/dist ./web-dist
 
 // Embed the built web application
+//
 //go:embed all:web-dist
 var webAssets embed.FS
 

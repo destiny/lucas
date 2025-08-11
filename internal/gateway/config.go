@@ -25,9 +25,9 @@ type ServerConfig struct {
 
 // APIConfig contains HTTP API server settings
 type APIConfig struct {
-	Address string     `yaml:"address"`
-	Timeout string     `yaml:"timeout"`
-	TLS     TLSConfig  `yaml:"tls"`
+	Address string    `yaml:"address"`
+	Timeout string    `yaml:"timeout"`
+	TLS     TLSConfig `yaml:"tls"`
 }
 
 // TLSConfig contains TLS/SSL settings
@@ -66,21 +66,21 @@ type LoggingConfig struct {
 
 // SecurityConfig contains security-related settings
 type SecurityConfig struct {
-	APIKeyRequired bool          `yaml:"api_key_required"`
-	RateLimiting   RateLimiting  `yaml:"rate_limiting"`
-	JWT            JWTConfig     `yaml:"jwt"`
+	APIKeyRequired bool         `yaml:"api_key_required"`
+	RateLimiting   RateLimiting `yaml:"rate_limiting"`
+	JWT            JWTConfig    `yaml:"jwt"`
 }
 
 // JWTConfig contains JWT token settings
 type JWTConfig struct {
-	SecretKey    string `yaml:"secret_key"`
-	Issuer       string `yaml:"issuer"`
-	ExpiryHours  int    `yaml:"expiry_hours"`
+	SecretKey   string `yaml:"secret_key"`
+	Issuer      string `yaml:"issuer"`
+	ExpiryHours int    `yaml:"expiry_hours"`
 }
 
 // RateLimiting contains rate limiting settings
 type RateLimiting struct {
-	Enabled            bool `yaml:"enabled"`
+	Enabled           bool `yaml:"enabled"`
 	RequestsPerMinute int  `yaml:"requests_per_minute"`
 }
 
@@ -158,7 +158,7 @@ func NewDefaultGatewayConfig() *GatewayConfig {
 		Security: SecurityConfig{
 			APIKeyRequired: false,
 			RateLimiting: RateLimiting{
-				Enabled:            true,
+				Enabled:           true,
 				RequestsPerMinute: 100,
 			},
 			JWT: JWTConfig{
