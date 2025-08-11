@@ -9,12 +9,13 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// Generate web assets before embedding
-//go:generate npm --prefix=../../web install
-//go:generate npm --prefix=../../web run build
-//go:generate cp -r ../../web/dist ./web-dist
+// Generate web assets before embedding with error handling and cross-platform support
+//go:generate bash -c "cd ../../web && npm install"
+//go:generate bash -c "cd ../../web && npm run build"
+//go:generate bash -c "rm -rf ./web-dist && cp -r ../../web/dist ./web-dist"
 
 // Embed the built web application
+//
 //go:embed all:web-dist
 var webAssets embed.FS
 

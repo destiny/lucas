@@ -10,8 +10,8 @@ import (
 
 // Config represents the hub configuration structure
 type Config struct {
-	Gateway GatewayConfig `yaml:"gateway"`
-	Hub     HubConfig     `yaml:"hub"`
+	Gateway GatewayConfig  `yaml:"gateway"`
+	Hub     HubConfig      `yaml:"hub"`
 	Devices []DeviceConfig `yaml:"devices"`
 }
 
@@ -190,16 +190,16 @@ func generateHubIDString() string {
 
 // HasValidKeys returns true if the configuration contains actual keys (not placeholders)
 func (c *Config) HasValidKeys() bool {
-	return c.Hub.PublicKey != "hub_public_key_here" && 
-		   c.Hub.PrivateKey != "hub_private_key_here" &&
-		   c.Gateway.PublicKey != "gateway_public_key_here"
+	return c.Hub.PublicKey != "hub_public_key_here" &&
+		c.Hub.PrivateKey != "hub_private_key_here" &&
+		c.Gateway.PublicKey != "gateway_public_key_here"
 }
 
 // HasValidHubKeys returns true if the hub has valid keys (not placeholders)
 func (c *Config) HasValidHubKeys() bool {
-	return c.Hub.PublicKey != "hub_public_key_here" && 
-		   c.Hub.PrivateKey != "hub_private_key_here" &&
-		   c.Hub.ProductKey != ""
+	return c.Hub.PublicKey != "hub_public_key_here" &&
+		c.Hub.PrivateKey != "hub_private_key_here" &&
+		c.Hub.ProductKey != ""
 }
 
 // HasValidGatewayKey returns true if gateway key is not a placeholder

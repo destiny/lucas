@@ -5,13 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"lucas/internal"
 	"net/http"
 	"net/http/httputil"
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog"
 	"lucas/internal/logger"
+
+	"github.com/rs/zerolog"
 )
 
 // BraviaClient represents a client for Sony Bravia TV control
@@ -19,31 +21,25 @@ type BraviaClient struct {
 	httpClient *http.Client
 	address    string
 	credential string
-	debug      bool
+	debugMode  bool
 	testMode   bool
 	logger     zerolog.Logger
 }
 
-// NewBraviaClient creates a new Bravia client instance
-func NewBraviaClient(address string, credential string, debug bool) *BraviaClient {
-	return NewBraviaClientWithFlags(address, credential, debug, false)
-}
-
-// NewBraviaClientWithFlags creates a new Bravia client instance with test mode support
-func NewBraviaClientWithFlags(address string, credential string, debug bool, testMode bool) *BraviaClient {
+func NewBraviaClient(address string, credential string, options internal.FnModeOptions) *BraviaClient {
 	client := &BraviaClient{
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 10 * time.Second,
 		},
 		address:    address,
 		credential: credential,
-		debug:      debug,
-		testMode:   testMode,
+		debugMode:  options.Debug,
+		testMode:   options.Test,
 		logger:     logger.New(),
 	}
+	if options.Debug {
+		logger.SetLevel(logger.LOG_DEBUG)
 
-	if debug {
-		logger.SetLevel("debug")
 	}
 
 	return client
@@ -84,7 +80,7 @@ func (c *BraviaClient) RemoteRequest(code BraviaRemoteCode) error {
 	req.Header.Set("SOAPAction", "\"urn:schemas-sony-com:service:IRCC:1#X_SendIRCC\"")
 	req.Header.Set("X-Auth-PSK", c.credential)
 
-	// Log complete HTTP request if debug is enabled
+	// Log complete HTTP request if debugMode is enabled
 	c.logHTTPRequest(req)
 
 	// Send request and measure duration
@@ -97,7 +93,7 @@ func (c *BraviaClient) RemoteRequest(code BraviaRemoteCode) error {
 	}
 	defer resp.Body.Close()
 
-	// Log complete HTTP response if debug is enabled
+	// Log complete HTTP response if debugMode is enabled
 	c.logHTTPResponse(resp, duration)
 
 	// Check response status
@@ -148,7 +144,7 @@ func (c *BraviaClient) ControlRequest(endpoint BraviaEndpoint, payload BraviaPay
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Auth-PSK", c.credential)
 
-	// Log complete HTTP request if debug is enabled
+	// Log complete HTTP request if debugMode is enabled
 	c.logHTTPRequest(req)
 
 	// Send request and measure duration
@@ -160,7 +156,7 @@ func (c *BraviaClient) ControlRequest(endpoint BraviaEndpoint, payload BraviaPay
 		return nil, fmt.Errorf("failed to send control request: %w", err)
 	}
 
-	// Log complete HTTP response if debug is enabled
+	// Log complete HTTP response if debugMode is enabled
 	c.logHTTPResponse(resp, duration)
 
 	return resp, nil
@@ -182,7 +178,7 @@ func CreatePayload(id int, method BraviaMethod, params []map[string]string) Brav
 
 // logHTTPRequest logs the complete HTTP request details when debug is enabled
 func (c *BraviaClient) logHTTPRequest(req *http.Request) {
-	if !c.debug {
+	if !c.debugMode {
 		return
 	}
 
@@ -206,7 +202,7 @@ func (c *BraviaClient) logHTTPRequest(req *http.Request) {
 
 // logHTTPResponse logs the complete HTTP response details when debug is enabled
 func (c *BraviaClient) logHTTPResponse(resp *http.Response, duration time.Duration) {
-	if !c.debug {
+	if !c.debugMode {
 		return
 	}
 

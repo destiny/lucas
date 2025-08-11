@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"lucas/internal"
 	"lucas/internal/bravia"
 )
 
@@ -23,27 +24,31 @@ func createMockServer(handler http.HandlerFunc) *httptest.Server {
 func createTestClient(serverURL string, debug bool) *bravia.BraviaClient {
 	// Remove http:// prefix if present
 	address := strings.TrimPrefix(serverURL, "http://")
-	return bravia.NewBraviaClient(address, "test-credential", debug)
+	opts := internal.FnModeOptions{Debug: debug, Test: false}
+	return bravia.NewBraviaClient(address, "test-credential", opts)
 }
 
 func TestNewBraviaClient(t *testing.T) {
 	t.Run("creates client with default values", func(t *testing.T) {
-		client := bravia.NewBraviaClient("192.168.1.100:80", "test-psk", false)
-		
+		opts := internal.FnModeOptions{Debug: false, Test: false}
+		client := bravia.NewBraviaClient("192.168.1.100:80", "test-psk", opts)
+
 		assert.NotNil(t, client)
 		// Test behavior rather than internal fields since they're not exported
 	})
 
 	t.Run("creates client with debug enabled", func(t *testing.T) {
-		client := bravia.NewBraviaClient("192.168.1.100:80", "test-psk", true)
-		
+		opts := internal.FnModeOptions{Debug: true, Test: false}
+		client := bravia.NewBraviaClient("192.168.1.100:80", "test-psk", opts)
+
 		assert.NotNil(t, client)
 		// Test behavior rather than internal fields since they're not exported
 	})
 
 	t.Run("handles empty credential", func(t *testing.T) {
-		client := bravia.NewBraviaClient("192.168.1.100:80", "", false)
-		
+		opts := internal.FnModeOptions{Debug: false, Test: false}
+		client := bravia.NewBraviaClient("192.168.1.100:80", "", opts)
+
 		assert.NotNil(t, client)
 		// Test behavior rather than internal fields since they're not exported
 	})
@@ -55,9 +60,9 @@ func TestCreatePayload(t *testing.T) {
 			{"key1": "value1"},
 			{"key2": "value2"},
 		}
-		
+
 		payload := bravia.CreatePayload(123, bravia.GetPowerStatus, params)
-		
+
 		assert.Equal(t, 123, payload.ID)
 		assert.Equal(t, "1.0", payload.Version)
 		assert.Equal(t, "getPowerStatus", payload.Method)
@@ -66,7 +71,7 @@ func TestCreatePayload(t *testing.T) {
 
 	t.Run("creates payload without params", func(t *testing.T) {
 		payload := bravia.CreatePayload(456, bravia.GetVolumeInformation, nil)
-		
+
 		assert.Equal(t, 456, payload.ID)
 		assert.Equal(t, "1.0", payload.Version)
 		assert.Equal(t, "getVolumeInformation", payload.Method)
@@ -75,11 +80,11 @@ func TestCreatePayload(t *testing.T) {
 
 	t.Run("creates payload with empty params slice", func(t *testing.T) {
 		params := []map[string]string{}
-		payload := bravia.CreatePayload(789, bravia.SetPowerStatus, params)
-		
+		payload := bravia.CreatePayload(789, bravia.GetPowerStatus, params)
+
 		assert.Equal(t, 789, payload.ID)
 		assert.Equal(t, "1.0", payload.Version)
-		assert.Equal(t, "setPowerStatus", payload.Method)
+		assert.Equal(t, "getPowerStatus", payload.Method)
 		assert.Equal(t, []map[string]string{}, payload.Params)
 	})
 }
@@ -91,19 +96,19 @@ func TestRemoteRequest(t *testing.T) {
 			// Verify request method and path
 			assert.Equal(t, "POST", r.Method)
 			assert.Equal(t, "/sony/ircc", r.URL.Path)
-			
+
 			// Verify headers
 			assert.Equal(t, "text/xml; charset=utf-8", r.Header.Get("Content-Type"))
 			assert.Equal(t, "\"urn:schemas-sony-com:service:IRCC:1#X_SendIRCC\"", r.Header.Get("Soapaction"))
 			assert.Equal(t, "test-credential", r.Header.Get("X-Auth-Psk"))
-			
+
 			// Verify SOAP body contains IRCC code
 			body, err := io.ReadAll(r.Body)
 			require.NoError(t, err)
 			assert.Contains(t, string(body), "AAAAAQAAAAEAAAAVAw==") // PowerButton code
 			assert.Contains(t, string(body), "X_SendIRCC")
 			assert.Contains(t, string(body), "IRCCCode")
-			
+
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`<?xml version="1.0"?><response>OK</response>`))
 		})
@@ -111,7 +116,7 @@ func TestRemoteRequest(t *testing.T) {
 
 		client := createTestClient(server.URL, false)
 		err := client.RemoteRequest(bravia.PowerButton)
-		
+
 		assert.NoError(t, err)
 	})
 
@@ -124,34 +129,35 @@ func TestRemoteRequest(t *testing.T) {
 
 		client := createTestClient(server.URL, false)
 		err := client.RemoteRequest(bravia.PowerButton)
-		
+
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "IRCC request failed with status 401")
 		assert.Contains(t, err.Error(), "Authentication failed")
 	})
 
 	t.Run("handles network errors", func(t *testing.T) {
-		client := bravia.NewBraviaClient("invalid-host:80", "test-credential", false)
+		opts := internal.FnModeOptions{Debug: false, Test: false}
+		client := bravia.NewBraviaClient("invalid-host:80", "test-credential", opts)
 		err := client.RemoteRequest(bravia.PowerButton)
-		
+
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to send IRCC request")
 	})
 
 	t.Run("formats different remote codes correctly", func(t *testing.T) {
 		testCodes := []bravia.BraviaRemoteCode{bravia.PowerButton, bravia.VolumeUp, bravia.VolumeDown, bravia.Mute}
-		
+
 		for _, code := range testCodes {
 			server := createMockServer(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				assert.Contains(t, string(body), string(code))
 				w.WriteHeader(http.StatusOK)
 			})
-			
+
 			client := createTestClient(server.URL, false)
 			err := client.RemoteRequest(code)
 			assert.NoError(t, err)
-			
+
 			server.Close()
 		}
 	})
@@ -160,32 +166,32 @@ func TestRemoteRequest(t *testing.T) {
 func TestControlRequest(t *testing.T) {
 	t.Run("successful control API request", func(t *testing.T) {
 		expectedResponse := map[string]interface{}{
-			"id":     float64(1), // JSON unmarshaling converts numbers to float64
+			"id":     float64(1),                                                // JSON unmarshaling converts numbers to float64
 			"result": []interface{}{map[string]interface{}{"status": "active"}}, // JSON arrays become []interface{}
 		}
-		
+
 		server := createMockServer(func(w http.ResponseWriter, r *http.Request) {
 			// Verify request method and path
 			assert.Equal(t, "POST", r.Method)
 			assert.Equal(t, "/sony/system", r.URL.Path)
-			
+
 			// Verify headers
 			assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 			assert.Equal(t, "test-credential", r.Header.Get("X-Auth-Psk"))
-			
+
 			// Verify JSON payload
 			body, err := io.ReadAll(r.Body)
 			require.NoError(t, err)
-			
+
 			var payload bravia.BraviaPayload
 			err = json.Unmarshal(body, &payload)
 			require.NoError(t, err)
-			
+
 			assert.Equal(t, 1, payload.ID)
 			assert.Equal(t, "1.0", payload.Version)
 			assert.Equal(t, "getPowerStatus", payload.Method)
 			assert.Equal(t, []map[string]string{}, payload.Params)
-			
+
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(expectedResponse)
@@ -195,16 +201,16 @@ func TestControlRequest(t *testing.T) {
 		client := createTestClient(server.URL, false)
 		payload := bravia.CreatePayload(1, bravia.GetPowerStatus, nil)
 		resp, err := client.ControlRequest(bravia.SystemEndpoint, payload)
-		
+
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		
+
 		// Verify response body
 		var responseBody map[string]interface{}
 		err = json.NewDecoder(resp.Body).Decode(&responseBody)
 		require.NoError(t, err)
 		assert.Equal(t, expectedResponse, responseBody)
-		
+
 		resp.Body.Close()
 	})
 
@@ -215,18 +221,18 @@ func TestControlRequest(t *testing.T) {
 			bravia.AVContentEndpoint:  "/sony/avContent",
 			bravia.AppControlEndpoint: "/sony/appControl",
 		}
-		
+
 		for endpoint, expectedPath := range endpoints {
 			server := createMockServer(func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, expectedPath, r.URL.Path)
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{"result": "ok"}`))
 			})
-			
+
 			client := createTestClient(server.URL, false)
 			payload := bravia.CreatePayload(1, bravia.GetPowerStatus, nil)
 			resp, err := client.ControlRequest(endpoint, payload)
-			
+
 			require.NoError(t, err)
 			assert.Equal(t, http.StatusOK, resp.StatusCode)
 			resp.Body.Close()
@@ -235,8 +241,9 @@ func TestControlRequest(t *testing.T) {
 	})
 
 	t.Run("handles JSON marshaling errors", func(t *testing.T) {
-		client := bravia.NewBraviaClient("localhost:80", "test", false)
-		
+		opts := internal.FnModeOptions{Debug: false, Test: false}
+		client := bravia.NewBraviaClient("localhost:80", "test", opts)
+
 		// Create payload with invalid data that can't be marshaled
 		payload := bravia.BraviaPayload{
 			ID:      1,
@@ -244,16 +251,16 @@ func TestControlRequest(t *testing.T) {
 			Method:  "test",
 			Params:  nil, // This should work, testing structure
 		}
-		
+
 		// This should work fine, so let's test with a mock server that fails
 		server := createMockServer(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		})
 		defer server.Close()
-		
+
 		client = createTestClient(server.URL, false)
 		resp, err := client.ControlRequest(bravia.SystemEndpoint, payload)
-		
+
 		// Should succeed with request but get server error
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
@@ -272,7 +279,7 @@ func TestDebugLogging(t *testing.T) {
 
 		// Create client with debug enabled
 		client := createTestClient(server.URL, true)
-		
+
 		// Test behavior instead of internal fields
 		err := client.RemoteRequest(bravia.PowerButton)
 		assert.NoError(t, err)
@@ -285,19 +292,20 @@ func TestDebugLogging(t *testing.T) {
 		defer server.Close()
 
 		client := createTestClient(server.URL, false)
-		
+
 		err := client.RemoteRequest(bravia.PowerButton)
 		assert.NoError(t, err)
 	})
 
 	t.Run("masks credentials in debug output", func(t *testing.T) {
 		// This test verifies the credential masking logic exists
-		client := bravia.NewBraviaClient("test:80", "secret-credential", true)
-		
+		opts := internal.FnModeOptions{Debug: true, Test: false}
+		client := bravia.NewBraviaClient("test:80", "secret-credential", opts)
+
 		// Test the masking helper by calling it with a mock request
 		req, _ := http.NewRequest("POST", "http://test:80/test", bytes.NewBuffer([]byte("test")))
 		req.Header.Set("X-Auth-PSK", "secret-credential")
-		
+
 		// Verify credential is set
 		assert.Equal(t, "secret-credential", req.Header.Get("X-Auth-PSK"))
 		// Can't test internal fields since they're not exported
@@ -308,8 +316,9 @@ func TestDebugLogging(t *testing.T) {
 func TestErrorScenarios(t *testing.T) {
 	t.Run("handles connection timeout", func(t *testing.T) {
 		// Test with non-routable IP address which should timeout
-		client := bravia.NewBraviaClient("192.168.255.255:80", "test", false)
-		
+		opts := internal.FnModeOptions{Debug: false, Test: false}
+		client := bravia.NewBraviaClient("192.168.255.255:80", "test", opts)
+
 		err := client.RemoteRequest(bravia.PowerButton)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to send IRCC request")
@@ -326,7 +335,7 @@ func TestErrorScenarios(t *testing.T) {
 		client := createTestClient(server.URL, false)
 		payload := bravia.CreatePayload(1, bravia.GetPowerStatus, nil)
 		resp, err := client.ControlRequest(bravia.SystemEndpoint, payload)
-		
+
 		// Request should succeed, JSON parsing is handled by caller
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -341,12 +350,12 @@ func TestErrorScenarios(t *testing.T) {
 		defer server.Close()
 
 		client := createTestClient(server.URL, false)
-		
+
 		// Test remote request error
 		err := client.RemoteRequest(bravia.PowerButton)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "IRCC request failed with status 500")
-		
+
 		// Test control request (should not error, returns response)
 		payload := bravia.CreatePayload(1, bravia.GetPowerStatus, nil)
 		resp, err := client.ControlRequest(bravia.SystemEndpoint, payload)
@@ -364,7 +373,7 @@ func TestErrorScenarios(t *testing.T) {
 
 		client := createTestClient(server.URL, false)
 		err := client.RemoteRequest(bravia.PowerButton)
-		
+
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "IRCC request failed with status 401")
 		assert.Contains(t, err.Error(), "Invalid PSK")

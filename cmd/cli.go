@@ -26,18 +26,18 @@ This provides a menu-driven interface for accessing various tools and utilities.
 		} else {
 			logger.SetSilentMode(true) // Keep logging silent
 		}
-		
+
 		log := logger.New()
 		log.Info().
 			Bool("debug", debugFlag).
 			Bool("test", testFlag).
 			Msg("Starting Lucas CLI interface")
-		
+
 		if err := cli.StartTUI(debugFlag, testFlag); err != nil {
 			log.Error().Err(err).Msg("Failed to start TUI")
 			return err
 		}
-		
+
 		return nil
 	},
 }

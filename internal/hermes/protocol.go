@@ -10,18 +10,18 @@ const (
 	// Protocol versions
 	HERMES_CLIENT = "HERMES01"
 	HERMES_WORKER = "HERMESW01"
-	
+
 	// Worker commands
 	HERMES_READY      = "READY"
 	HERMES_REQUEST    = "REQUEST"
 	HERMES_REPLY      = "REPLY"
 	HERMES_HEARTBEAT  = "HEARTBEAT"
 	HERMES_DISCONNECT = "DISCONNECT"
-	
+
 	// Client commands
 	HERMES_REQ = "REQ"
 	HERMES_REP = "REP"
-	
+
 	// Service lifecycle
 	HERMES_SERVICE_UP   = "SERVICE_UP"
 	HERMES_SERVICE_DOWN = "SERVICE_DOWN"
@@ -40,11 +40,11 @@ type Message struct {
 
 // WorkerMessage represents a message from worker to broker
 type WorkerMessage struct {
-	Protocol  string `json:"protocol"`
-	Command   string `json:"command"`
-	Service   string `json:"service,omitempty"`
-	Body      []byte `json:"body,omitempty"`
-	ClientID  string `json:"client_id,omitempty"`
+	Protocol string `json:"protocol"`
+	Command  string `json:"command"`
+	Service  string `json:"service,omitempty"`
+	Body     []byte `json:"body,omitempty"`
+	ClientID string `json:"client_id,omitempty"`
 }
 
 // ClientMessage represents a message from client to broker
@@ -88,27 +88,27 @@ type ServiceInfo struct {
 
 // WorkerInfo represents information about a worker
 type WorkerInfo struct {
-	Identity    string    `json:"identity"`
-	Service     string    `json:"service"`
-	Address     string    `json:"address,omitempty"`
-	Expiry      time.Time `json:"expiry"`
-	LastPing    time.Time `json:"last_ping"`
-	Status      string    `json:"status"`
-	Liveness    int       `json:"liveness"`
-	Requests    int       `json:"requests"`
+	Identity string    `json:"identity"`
+	Service  string    `json:"service"`
+	Address  string    `json:"address,omitempty"`
+	Expiry   time.Time `json:"expiry"`
+	LastPing time.Time `json:"last_ping"`
+	Status   string    `json:"status"`
+	Liveness int       `json:"liveness"`
+	Requests int       `json:"requests"`
 }
 
 // BrokerStats represents broker statistics
 type BrokerStats struct {
-	Services          int       `json:"services"`
-	Workers           int       `json:"workers"`
-	Requests          int       `json:"requests"`
-	Responses         int       `json:"responses"`
+	Services           int       `json:"services"`
+	Workers            int       `json:"workers"`
+	Requests           int       `json:"requests"`
+	Responses          int       `json:"responses"`
 	HeartbeatsReceived int       `json:"heartbeats_received"`
-	HeartbeatsSent    int       `json:"heartbeats_sent"`
-	StartTime         time.Time `json:"start_time"`
-	LastRequest       time.Time `json:"last_request"`
-	LastHeartbeat     time.Time `json:"last_heartbeat"`
+	HeartbeatsSent     int       `json:"heartbeats_sent"`
+	StartTime          time.Time `json:"start_time"`
+	LastRequest        time.Time `json:"last_request"`
+	LastHeartbeat      time.Time `json:"last_heartbeat"`
 }
 
 // RequestHandler interface for handling service requests
