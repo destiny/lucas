@@ -867,59 +867,6 @@ func (api *APIServer) handleHubDeviceConfigure(w http.ResponseWriter, r *http.Re
 	// This functionality should be implemented via ZMQ messaging through broker service
 	api.sendError(w, http.StatusNotImplemented, "Hub device configuration via direct HTTP not implemented - use ZMQ messaging")
 	return
-
-	configJSON, err := json.Marshal(configPayload)
-	if err != nil {
-		api.sendError(w, http.StatusInternalServerError, "Failed to marshal configuration")
-		return
-	}
-
-	// Send configuration to hub
-	resp, err := http.Post(hubConfigURL, "application/json", strings.NewReader(string(configJSON)))
-	if err != nil {
-		api.logger.Error().
-			Str("hub_id", hubID).
-			Err(err).
-			Msg("Failed to send configuration to hub")
-		api.sendError(w, http.StatusServiceUnavailable, "Failed to communicate with hub")
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		api.logger.Error().
-			Str("hub_id", hubID).
-			Int("status_code", resp.StatusCode).
-			Msg("Hub rejected configuration")
-		api.sendError(w, http.StatusBadGateway, "Hub rejected the configuration")
-		return
-	}
-
-	// Parse hub response
-	var hubResponse map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&hubResponse); err != nil {
-		api.logger.Error().
-			Str("hub_id", hubID).
-			Err(err).
-			Msg("Failed to parse hub response")
-	}
-
-	api.logger.Info().
-		Int("user_id", user.ID).
-		Str("hub_id", hubID).
-		Int("device_count", len(req.Devices)).
-		Msg("Hub device configuration completed successfully")
-
-	response := map[string]interface{}{
-		"success":            true,
-		"message":            fmt.Sprintf("Successfully configured %d devices for hub %s", len(req.Devices), hubID),
-		"hub_id":            hubID,
-		"devices_configured": len(req.Devices),
-		"hub_response":      hubResponse,
-		"timestamp":         time.Now().UTC().Format(time.RFC3339),
-	}
-
-	api.sendJSON(w, http.StatusOK, response)
 }
 
 // handleGetHubDevices returns the current device configuration for a hub
@@ -950,38 +897,6 @@ func (api *APIServer) handleGetHubDevices(w http.ResponseWriter, r *http.Request
 	api.sendError(w, http.StatusNotImplemented, "Hub device listing via direct HTTP not implemented - use ZMQ messaging")
 	return
 	
-	resp, err := http.Get(hubDevicesURL)
-	if err != nil {
-		api.logger.Error().
-			Str("hub_id", hubID).
-			Err(err).
-			Msg("Failed to get devices from hub")
-		api.sendError(w, http.StatusServiceUnavailable, "Failed to communicate with hub")
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		api.sendError(w, http.StatusBadGateway, "Hub failed to provide device list")
-		return
-	}
-
-	// Parse and forward hub response
-	var hubResponse map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&hubResponse); err != nil {
-		api.sendError(w, http.StatusInternalServerError, "Failed to parse hub response")
-		return
-	}
-
-	response := map[string]interface{}{
-		"success":   true,
-		"message":   "Hub devices retrieved successfully",
-		"hub_id":    hubID,
-		"data":      hubResponse["data"],
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-	}
-
-	api.sendJSON(w, http.StatusOK, response)
 }
 
 // handleHubDeviceReload triggers a device reload on the hub
@@ -1011,44 +926,4 @@ func (api *APIServer) handleHubDeviceReload(w http.ResponseWriter, r *http.Reque
 	// This functionality should be implemented via ZMQ messaging through broker service
 	api.sendError(w, http.StatusNotImplemented, "Hub device reload via direct HTTP not implemented - use ZMQ messaging")
 	return
-	
-	resp, err := http.Post(hubReloadURL, "application/json", strings.NewReader("{}"))
-	if err != nil {
-		api.logger.Error().
-			Str("hub_id", hubID).
-			Err(err).
-			Msg("Failed to send reload request to hub")
-		api.sendError(w, http.StatusServiceUnavailable, "Failed to communicate with hub")
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		api.sendError(w, http.StatusBadGateway, "Hub failed to reload devices")
-		return
-	}
-
-	// Parse hub response
-	var hubResponse map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&hubResponse); err != nil {
-		api.logger.Error().
-			Str("hub_id", hubID).
-			Err(err).
-			Msg("Failed to parse hub reload response")
-	}
-
-	api.logger.Info().
-		Int("user_id", user.ID).
-		Str("hub_id", hubID).
-		Msg("Hub device reload completed successfully")
-
-	response := map[string]interface{}{
-		"success":      true,
-		"message":      fmt.Sprintf("Successfully reloaded devices for hub %s", hubID),
-		"hub_id":       hubID,
-		"hub_response": hubResponse,
-		"timestamp":    time.Now().UTC().Format(time.RFC3339),
-	}
-
-	api.sendJSON(w, http.StatusOK, response)
 }
