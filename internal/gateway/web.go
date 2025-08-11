@@ -9,7 +9,8 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// Generate web assets before embedding
+// Generate web assets before embedding with clean build flow
+//go:generate rm -rf ./web-dist
 //go:generate npm --prefix=../../web install
 //go:generate npm --prefix=../../web run build
 //go:generate cp -r ../../web/dist ./web-dist

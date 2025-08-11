@@ -351,7 +351,7 @@ func (bs *BrokerService) SendDeviceCommand(hubID, deviceID string, action json.R
 		return nil, fmt.Errorf("failed to marshal device request: %w", err)
 	}
 
-	// Use fire-and-forget mode for remote control commands
+	// Use fire-and-forget mode for remote control commands (now fixed in broker)
 	// This provides immediate response to user and handles responses asynchronously
 	bs.clientMutex.Lock()
 	defer bs.clientMutex.Unlock()
@@ -363,6 +363,13 @@ func (bs *BrokerService) SendDeviceCommand(hubID, deviceID string, action json.R
 	// Send as fire-and-forget request using nonce correlation
 	err = bs.client.RequestFireAndForget(serviceName, requestBytes, nonce)
 	if err != nil {
+		bs.logger.Error().
+			Str("hub_id", hubID).
+			Str("device_id", deviceID).
+			Str("nonce", nonce).
+			Str("message_id", messageID).
+			Err(err).
+			Msg("[HUB_DEBUG] Device command failed to send")
 		return nil, fmt.Errorf("failed to send device command: %w", err)
 	}
 
@@ -384,7 +391,7 @@ func (bs *BrokerService) SendDeviceCommand(hubID, deviceID string, action json.R
 		Str("hub_id", hubID).
 		Str("device_id", deviceID).
 		Str("nonce", nonce).
-		Msg("Device command sent (fire-and-forget)")
+		Msg("[HUB_DEBUG] Device command sent successfully")
 
 	return dataBytes, nil
 }
