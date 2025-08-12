@@ -55,9 +55,11 @@ jobs:
           - runner: ubuntu-latest
             platform: linux/amd64
             arch: amd64
-          - runner: ubuntu-24.04-arm64
-            platform: linux/arm64  
+            os: linux
+          - runner: macos-14
+            platform: darwin/arm64  
             arch: arm64
+            os: darwin
     
     steps:
       - name: Checkout code
@@ -79,7 +81,7 @@ jobs:
           docker buildx build \
             --platform=${{ matrix.platform }} \
             --build-arg VERSION="$VERSION" \
-            --build-arg TARGETOS=linux \
+            --build-arg TARGETOS=${{ matrix.os }} \
             --build-arg TARGETARCH=${{ matrix.arch }} \
             --target=export \
             --output=type=local,dest=./dist \
@@ -87,14 +89,14 @@ jobs:
             .
           
           # Rename the extracted binary
-          mv ./dist/lucas ./dist/lucas-linux-${{ matrix.arch }}
+          mv ./dist/lucas ./dist/lucas-${{ matrix.os }}-${{ matrix.arch }}
           ls -la ./dist/
       
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lucas-linux-${{ matrix.arch }}
-          path: dist/lucas-linux-${{ matrix.arch }}
+          name: lucas-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/lucas-${{ matrix.os }}-${{ matrix.arch }}
 
   release:
     runs-on: ubuntu-latest
