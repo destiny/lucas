@@ -533,3 +533,59 @@ troubleshooting:
            2) Device response delays (some devices are slow)
            3) Network latency between gateway and hub
     Solution: Increase timeout, optimize device drivers, check network connectivity
+
+# Multi-Transport Network Provider
+network_provider:
+  purpose: "Allow hubs to connect via different transports (ZMQ, CoAP) simultaneously"
+  principle: "Simple proxy routing - NOT complex service mesh"
+  design: "Gateway tracks hub_id → transport_type, routes messages accordingly"
+  compliance: "Follows Lucas KISS principle and existing hub_id system"
+  
+  hub_transport_registry:
+    description: "Maps hub_id to active transport provider"
+    format: "hub_id string → transport_name string"
+    example: "hub_ec8ad6e1-1d4c-46b8-b872-9df4e257ffff → 'zmq'"
+    storage: "In-memory map, rebuilt on hub connections"
+    lifecycle: "Updated when hub connects/disconnects"
+    
+  provider_interface:
+    description: "Minimal interface for different network transports"
+    methods: ["Send(hubID, message)", "Start()", "Stop()"]
+    implementations: ["ZMQ (existing Hermes)", "CoAP (future)", "HTTP (future)"]
+    principle: "Each provider handles connection details internally"
+    
+  routing_flow: |
+    sequenceDiagram
+      User->>API: POST /devices/living_room_tv/action
+      API->>Router: Extract hub_id from device
+      Router->>Registry: Lookup transport for hub_id
+      Registry-->>Router: "zmq" (or "coap")
+      Router->>ZMQProvider: Send message via ZMQ
+      ZMQProvider->>Hub: ZMQ message to hub_id
+      Hub-->>ZMQProvider: Response
+      ZMQProvider-->>Router: Response
+      Router-->>API: Response
+      API-->>User: HTTP response
+      
+  configuration:
+    format: |
+      network:
+        zmq_enabled: true    # ZMQ provider active
+        coap_enabled: false  # CoAP provider inactive (future)
+        http_enabled: false  # HTTP provider inactive (future)
+    migration_strategy: "Start with ZMQ only, add other providers incrementally"
+    
+  kiss_compliance:
+    - "Use existing hub_id system (no new identifiers)"
+    - "Simple map lookup (no complex endpoint management)"  
+    - "Provider handles connection details internally"
+    - "Start with ZMQ wrapper, add CoAP later"
+    - "No service discovery - direct hub routing"
+    - "Maintain household application simplicity"
+    
+  benefits:
+    - "Hubs can switch transports without gateway changes"
+    - "Mixed protocol support (some hubs ZMQ, others CoAP)"
+    - "Future-proof for IoT protocols (CoAP, MQTT, etc.)"
+    - "Backward compatible with existing ZMQ hubs"
+    - "Zero configuration - auto-detects hub transport"
