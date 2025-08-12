@@ -2,10 +2,44 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Calculate and create next version
+        id: version
+        run: |
+          YEAR=$(date +%y)
+          QUARTER=$(( ($(date +%m) - 1) / 3 + 1 ))
+          LATEST=$(git tag -l "v${YEAR}.${QUARTER}.*" | sort -V | tail -n1)
+          if [[ -z "$LATEST" ]]; then
+            NEXT="v${YEAR}.${QUARTER}.01"
+          else
+            NUM=$(echo $LATEST | cut -d. -f3)
+            NEXT="v${YEAR}.${QUARTER}.$(printf "%02d" $((10#$NUM + 1)))"
+          fi
+          echo "Calculated next version: $NEXT"
+          echo "version=$NEXT" >> $GITHUB_OUTPUT
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag $NEXT -m "Release $NEXT - Quarterly release"
+          git push origin $NEXT
+
   build:
     runs-on: ubuntu-latest
+    needs: [create-release]
+    if: always() && (github.event_name == 'push' || needs.create-release.result == 'success')
     strategy:
       matrix:
         include:
