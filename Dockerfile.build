@@ -1,0 +1,50 @@
+# Multi-stage build for Lucas smart home system
+FROM node:18-alpine AS web-builder
+
+# Copy web source files
+COPY web/ /src/web/
+WORKDIR /src/web
+
+# Build web assets
+RUN npm install && npm run build
+
+# Go build stage
+FROM golang:1.23-alpine AS go-builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    build-base \
+    libzmq \
+    zeromq-dev \
+    pkgconfig
+
+# Set working directory
+WORKDIR /src
+
+# Copy Go module files first for better caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Copy built web assets from previous stage
+COPY --from=web-builder /src/web/dist ./web/dist
+
+# Generate embedded assets
+RUN go generate ./internal/gateway
+
+# Build the binary
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ARG VERSION=dev
+
+ENV CGO_ENABLED=1
+ENV GOOS=${TARGETOS}
+ENV GOARCH=${TARGETARCH}
+
+RUN go build -ldflags="-s -w -X main.version=${VERSION}" -o lucas .
+
+# Extract binary stage (for build artifacts)
+FROM scratch AS export
+COPY --from=go-builder /src/lucas /lucas
