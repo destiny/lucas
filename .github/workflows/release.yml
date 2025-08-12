@@ -4,6 +4,10 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pull-requests: read
+
 jobs:
   create-release:
     runs-on: ubuntu-latest
@@ -38,8 +42,8 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    if: always() && !cancelled()
     needs: [create-release]
-    if: always() && (github.event_name == 'push' || needs.create-release.result == 'success')
     strategy:
       matrix:
         include:
@@ -68,23 +72,42 @@ jobs:
         with:
           go-version: '1.23'
       
+      # Install CGO dependencies for cross-compilation
+      - name: Install cross-compile dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+          if [ "${{ matrix.goos }}" = "darwin" ]; then
+            # For macOS, we'll use native Go cross-compilation
+            echo "Darwin target - using native Go cross-compilation"
+          fi
+      
       # Run go generate to build web assets
       - name: Generate web assets
         run: go generate ./internal/gateway
       
-      # Cross-compile with CGO support
-      - name: Cross-compile binary
-        uses: crazy-max/ghaction-xgo@v3
-        with:
-          go_version: 1.23
-          dest: dist
-          prefix: lucas
-          targets: ${{ matrix.goos }}/${{ matrix.goarch }}
-          ldflags: -s -w -X main.version=${{ github.ref_name }}
+      # Create dist directory
+      - name: Create dist directory
+        run: mkdir -p dist
+      
+      # Cross-compile binary
+      - name: Build binary
+        env:
+          CGO_ENABLED: 1
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          if [ "${{ matrix.goos }}" = "linux" ] && [ "${{ matrix.goarch }}" = "arm64" ]; then
+            export CC=aarch64-linux-gnu-gcc
+          fi
+          
+          VERSION="${{ needs.create-release.outputs.version || github.ref_name }}"
+          go build -ldflags="-s -w -X main.version=$VERSION" -o "dist/lucas-${{ matrix.goos }}-${{ matrix.goarch }}" .
       
       # Upload binaries to release
       - name: Upload release assets
         uses: softprops/action-gh-release@v1
         with:
           files: dist/*
+          tag_name: ${{ needs.create-release.outputs.version || github.ref_name }}
           generate_release_notes: true
