@@ -26,11 +26,29 @@ import (
 	"lucas/internal/logger"
 )
 
-// WorkerService integrates Hermes worker with hub functionality
+// GenericWorker interface for different worker types
+type GenericWorker interface {
+	Start() error
+	Stop() error
+	IsConnected() bool
+}
+
+// HermesWorkerAdapter interface for Hermes-specific functionality
+type HermesWorkerAdapter interface {
+	GetStats() *ServiceWorkerStats
+	GetHermesWorker() *hermes.HermesWorker
+}
+
+// CoAPWorkerAdapter interface for CoAP-specific functionality  
+type CoAPWorkerAdapter interface {
+	GetStats() *ServiceHandlerStats
+}
+
+// WorkerService integrates different worker types with hub functionality
 type WorkerService struct {
 	config       *Config
 	deviceMgr    *DeviceManager
-	workers      map[string]*hermes.HermesWorker
+	workers      map[string]GenericWorker  // Changed to support different worker types
 	logger       zerolog.Logger
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -86,7 +104,7 @@ func NewWorkerService(config *Config, deviceMgr *DeviceManager) *WorkerService {
 	return &WorkerService{
 		config:    config,
 		deviceMgr: deviceMgr,
-		workers:   make(map[string]*hermes.HermesWorker),
+		workers:   make(map[string]GenericWorker),
 		logger:    logger.New(),
 		ctx:       ctx,
 		cancel:    cancel,
@@ -138,7 +156,7 @@ func (ws *WorkerService) Stop() error {
 
 	// Stop all workers
 	ws.mutex.RLock()
-	workers := make(map[string]*hermes.HermesWorker)
+	workers := make(map[string]GenericWorker)
 	for name, worker := range ws.workers {
 		workers[name] = worker
 	}
@@ -180,34 +198,68 @@ func (ws *WorkerService) registerHubWorker() error {
 		stats:     &ServiceHandlerStats{},
 	}
 
-	// TODO: Future enhancement - create different worker types based on transport
-	// For now, Hermes only supports ZMQ, but endpoint may vary
-	// When CoAP/HTTP support is added, create appropriate worker type here
+	// Create appropriate worker type based on transport
 	switch transport {
 	case "zmq":
 		// Create ZMQ-based Hermes worker (current implementation)
+		worker := hermes.NewWorker(
+			ws.config.Gateway.Endpoint,
+			serviceName,
+			workerIdentity,
+			handler,
+		)
+		// Configure worker settings for internet reliability
+		worker.SetHeartbeat(45 * time.Second)       // Longer heartbeat interval for internet
+		worker.SetReconnectInterval(10 * time.Second) // Longer initial reconnect delay
+		
+		ws.mutex.Lock()
+		ws.workers[serviceName] = worker
+		ws.mutex.Unlock()
+		
 	case "coap":
-		ws.logger.Warn().Msg("CoAP transport configured but not yet implemented, falling back to ZMQ")
+		// Create CoAP-based worker  
+		coapWorker := NewCoAPWorker(ws.config, ws.deviceMgr, serviceName, workerIdentity)
+		
+		// CoAP workers implement the GenericWorker interface
+		ws.mutex.Lock()
+		ws.workers[serviceName] = coapWorker
+		ws.mutex.Unlock()
+		
 	case "http":
 		ws.logger.Warn().Msg("HTTP transport configured but not yet implemented, falling back to ZMQ")
+		// Fallback to ZMQ
+		worker := hermes.NewWorker(
+			ws.config.Gateway.Endpoint,
+			serviceName,
+			workerIdentity,
+			handler,
+		)
+		worker.SetHeartbeat(45 * time.Second)
+		worker.SetReconnectInterval(10 * time.Second)
+		
+		ws.mutex.Lock()
+		ws.workers[serviceName] = worker
+		ws.mutex.Unlock()
+		
 	default:
 		ws.logger.Warn().Str("transport", transport).Msg("Unknown transport type, using ZMQ")
+		// Fallback to ZMQ
+		worker := hermes.NewWorker(
+			ws.config.Gateway.Endpoint,
+			serviceName,
+			workerIdentity,
+			handler,
+		)
+		worker.SetHeartbeat(45 * time.Second)
+		worker.SetReconnectInterval(10 * time.Second)
+		
+		ws.mutex.Lock()
+		ws.workers[serviceName] = worker
+		ws.mutex.Unlock()
 	}
 
-	// Create Hermes worker (currently ZMQ-only)
-	worker := hermes.NewWorker(
-		ws.config.Gateway.Endpoint,
-		serviceName,
-		workerIdentity,
-		handler,
-	)
-
-	// Configure worker settings for internet reliability
-	worker.SetHeartbeat(45 * time.Second)       // Longer heartbeat interval for internet
-	worker.SetReconnectInterval(10 * time.Second) // Longer initial reconnect delay
-
+	// Update service stats
 	ws.mutex.Lock()
-	ws.workers[serviceName] = worker
 	ws.stats.ServiceStats[serviceName] = &ServiceWorkerStats{
 		ServiceName:    serviceName,
 		WorkerIdentity: workerIdentity,
@@ -256,11 +308,31 @@ func (ws *WorkerService) GetServiceStats() *WorkerServiceStats {
 }
 
 // GetWorkerForService returns the worker for a specific service
-func (ws *WorkerService) GetWorkerForService(serviceName string) (*hermes.HermesWorker, bool) {
+func (ws *WorkerService) GetWorkerForService(serviceName string) (GenericWorker, bool) {
 	ws.mutex.RLock()
 	defer ws.mutex.RUnlock()
 	worker, exists := ws.workers[serviceName]
 	return worker, exists
+}
+
+// GetHermesWorkerForService returns the Hermes worker for a specific service (if it is a Hermes worker)
+func (ws *WorkerService) GetHermesWorkerForService(serviceName string) (*hermes.HermesWorker, bool) {
+	worker, exists := ws.GetWorkerForService(serviceName)
+	if !exists {
+		return nil, false
+	}
+	
+	// Try to get the Hermes worker if this implements the adapter interface
+	if adapter, ok := worker.(HermesWorkerAdapter); ok {
+		return adapter.GetHermesWorker(), true
+	}
+	
+	// Try direct type assertion for backward compatibility
+	if hermesWorker, ok := worker.(*hermes.HermesWorker); ok {
+		return hermesWorker, true
+	}
+	
+	return nil, false
 }
 
 // IsServiceActive returns whether a service is active
@@ -295,12 +367,17 @@ func (ws *WorkerService) IsGatewayReachable() bool {
 	// Check if any workers are connected AND recently communicated with gateway
 	for _, worker := range ws.workers {
 		if worker.IsConnected() {
-			// Check if worker has recent heartbeat activity
-			stats := worker.GetStats()
-			timeSinceLastHeartbeat := time.Since(stats.LastHeartbeatReceived)
-			
-			// Consider gateway reachable if heartbeat was recent (within 2 minutes)
-			if timeSinceLastHeartbeat < 2*time.Minute {
+			// For Hermes workers, check heartbeat activity
+			if hermesWorker, ok := worker.(*hermes.HermesWorker); ok {
+				stats := hermesWorker.GetStats()
+				timeSinceLastHeartbeat := time.Since(stats.LastHeartbeatReceived)
+				
+				// Consider gateway reachable if heartbeat was recent (within 2 minutes)
+				if timeSinceLastHeartbeat < 2*time.Minute {
+					return true
+				}
+			} else {
+				// For non-Hermes workers (e.g., CoAP), just check if connected
 				return true
 			}
 		}
@@ -333,13 +410,23 @@ func (ws *WorkerService) updateWorkerStats() {
 
 	for serviceName, worker := range ws.workers {
 		if serviceStats, exists := ws.stats.ServiceStats[serviceName]; exists {
-			workerStats := worker.GetStats()
 			wasConnected := serviceStats.IsConnected
 			isConnected := worker.IsConnected()
 			
-			serviceStats.RequestsHandled = workerStats.RequestsHandled
-			serviceStats.RequestsFailed = workerStats.RequestsFailed
-			serviceStats.LastRequest = workerStats.LastRequest
+			// Update stats based on worker type
+			if hermesWorker, ok := worker.(*hermes.HermesWorker); ok {
+				workerStats := hermesWorker.GetStats()
+				serviceStats.RequestsHandled = workerStats.RequestsHandled
+				serviceStats.RequestsFailed = workerStats.RequestsFailed
+				serviceStats.LastRequest = workerStats.LastRequest
+			} else if coapWorker, ok := worker.(CoAPWorkerAdapter); ok {
+				workerStats := coapWorker.GetStats()
+				// Convert from ServiceHandlerStats to ServiceWorkerStats format
+				serviceStats.RequestsHandled = workerStats.RequestsProcessed
+				serviceStats.RequestsFailed = workerStats.RequestsFailed  
+				serviceStats.LastRequest = workerStats.LastRequest
+			}
+			
 			serviceStats.IsConnected = isConnected
 			
 			// Detect reconnection after disconnection 

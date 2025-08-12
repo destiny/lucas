@@ -26,11 +26,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"lucas/internal/gateway"
 	"lucas/internal/logger"
 	"lucas/internal/network"
 	"lucas/internal/network/zmq"
+	"lucas/internal/network/coap"
 )
 
 var (
@@ -611,14 +613,24 @@ func setupNetworkProviders(router *network.Router, config *gateway.GatewayConfig
 		enabledCount++
 	}
 
-	// Setup CoAP provider if enabled (placeholder for future implementation)
+	// Setup CoAP provider if enabled
 	if config.Network.Providers.CoAP.Enabled {
-		log.Warn().
+		endpoint := config.Network.Providers.CoAP.Endpoint
+		if endpoint == "" {
+			endpoint = "coap://0.0.0.0:5683" // Default CoAP endpoint
+		}
+
+		coapProvider := coap.NewCoAPProvider(endpoint)
+
+		if err := router.RegisterProvider(coapProvider); err != nil {
+			return fmt.Errorf("failed to register CoAP provider: %w", err)
+		}
+
+		log.Info().
 			Str("provider", "coap").
-			Msg("CoAP provider requested but not yet implemented")
-		// TODO: Add CoAP provider when implemented
-		// coapProvider := coap.NewCoAPProvider(config.Network.Providers.CoAP.Endpoint)
-		// router.RegisterProvider(coapProvider)
+			Str("endpoint", endpoint).
+			Msg("CoAP provider registered")
+		enabledCount++
 	}
 
 	// Setup HTTP provider if enabled (placeholder for future implementation)
