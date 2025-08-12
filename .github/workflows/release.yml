@@ -87,9 +87,13 @@ jobs:
       - name: Install native dependencies (Mac only)
         if: matrix.build_type == 'native'
         run: |
-          brew install zmq pkg-config node
+          # Install ZMQ and Node.js (pkg-config usually pre-installed as pkgconf)
+          brew install zmq node
           node --version
           npm --version
+          
+          # Verify pkg-config is available (pkgconf provides this)
+          pkg-config --version || echo "Using system pkgconf"
       
       - name: Create dist directory
         run: mkdir -p dist
