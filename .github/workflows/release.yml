@@ -62,7 +62,7 @@ jobs:
             arch: arm64
             os: darwin
             build_type: native
-          - runner: ubuntu-24.04-arm64
+          - runner: ubuntu-latest-arm64
             platform: linux/arm64
             arch: arm64
             os: linux
