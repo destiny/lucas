@@ -77,6 +77,7 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: '1.23'
+          cache: false
       
       - name: Set up Docker Buildx (Docker builds)
         if: matrix.build_type == 'docker'
@@ -87,6 +88,10 @@ jobs:
       - name: Install native dependencies (Mac only)
         if: matrix.build_type == 'native'
         run: |
+          # Disable Homebrew analytics and auto-update to reduce cache issues
+          export HOMEBREW_NO_ANALYTICS=1
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          
           # Install ZMQ and Node.js (pkg-config usually pre-installed as pkgconf)
           brew install zmq node
           node --version
