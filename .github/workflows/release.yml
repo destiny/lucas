@@ -49,15 +49,6 @@ jobs:
     runs-on: ubuntu-latest
     if: always() && !cancelled()
     needs: [create-release]
-    strategy:
-      matrix:
-        include:
-          - goos: darwin
-            goarch: arm64
-          - goos: linux  
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
     
     steps:
       - name: Checkout code
@@ -77,15 +68,11 @@ jobs:
         with:
           go-version: '1.23'
       
-      # Install CGO dependencies for cross-compilation
-      - name: Install cross-compile dependencies
+      # Install ZMQ development libraries
+      - name: Install ZMQ dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
-          if [ "${{ matrix.goos }}" = "darwin" ]; then
-            # For macOS, we'll use native Go cross-compilation
-            echo "Darwin target - using native Go cross-compilation"
-          fi
+          sudo apt-get install -y libzmq3-dev
       
       # Run go generate to build web assets
       - name: Generate web assets
@@ -95,19 +82,17 @@ jobs:
       - name: Create dist directory
         run: mkdir -p dist
       
-      # Cross-compile binary
-      - name: Build binary
+      # Build Linux AMD64 binary
+      - name: Build Linux AMD64 binary
         env:
           CGO_ENABLED: 1
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+          GOOS: linux
+          GOARCH: amd64
         run: |
-          if [ "${{ matrix.goos }}" = "linux" ] && [ "${{ matrix.goarch }}" = "arm64" ]; then
-            export CC=aarch64-linux-gnu-gcc
-          fi
-          
           VERSION="${{ needs.create-release.outputs.version || github.ref_name }}"
-          go build -ldflags="-s -w -X main.version=$VERSION" -o "dist/lucas-${{ matrix.goos }}-${{ matrix.goarch }}" .
+          echo "Building for Linux AMD64 with version: $VERSION"
+          go build -ldflags="-s -w -X main.version=$VERSION" -o dist/lucas-linux-amd64 .
+          ls -la dist/
       
       # Upload binaries to release
       - name: Upload release assets
