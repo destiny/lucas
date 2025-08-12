@@ -55,7 +55,7 @@ func NewZMQProvider(endpoint string, keys *ZMQKeys) *ZMQProvider {
 	return &ZMQProvider{
 		endpoint:      endpoint,
 		keys:          keys,
-		logger:        logger.GetLogger("network.zmq"),
+		logger:        logger.New(),
 		connectedHubs: make(map[string]bool),
 	}
 }
@@ -76,24 +76,19 @@ func (z *ZMQProvider) Start(ctx context.Context) error {
 
 	// Start Hermes broker
 	broker := hermes.NewBroker(z.endpoint)
-	if z.keys != nil {
-		broker.SetCurveKeys(z.keys.PublicKey, z.keys.PrivateKey)
-	}
-
-	if err := broker.Start(ctx); err != nil {
+	// TODO: Add curve key support if needed
+	
+	if err := broker.Start(); err != nil {
 		return fmt.Errorf("failed to start ZMQ broker: %w", err)
 	}
 	z.broker = broker
 
 	// Create persistent client for gateway communication
-	client := hermes.NewHermesClient("gateway_main")
-	if z.keys != nil {
-		client.SetCurveKeys(z.keys.PublicKey)
-	}
-
-	if err := client.Connect(ctx, z.endpoint); err != nil {
+	client := hermes.NewClient(z.endpoint, "zmq_provider_client")
+	
+	if err := client.Start(); err != nil {
 		z.broker.Stop()
-		return fmt.Errorf("failed to connect ZMQ client: %w", err)
+		return fmt.Errorf("failed to start ZMQ client: %w", err)
 	}
 	z.client = client
 
@@ -115,8 +110,8 @@ func (z *ZMQProvider) Stop() error {
 
 	// Stop client
 	if z.client != nil {
-		if err := z.client.Close(); err != nil {
-			z.logger.Error().Err(err).Msg("Failed to close ZMQ client")
+		if err := z.client.Stop(); err != nil {
+			z.logger.Error().Err(err).Msg("Failed to stop ZMQ client")
 			lastErr = err
 		}
 		z.client = nil
@@ -159,14 +154,14 @@ func (z *ZMQProvider) Send(ctx context.Context, hubID string, message []byte) ([
 		return nil, fmt.Errorf("failed to parse service request: %w", err)
 	}
 
-	// Set timeout from context or use default
+	// Set timeout from context or use default  
 	timeout := 30 * time.Second
 	if deadline, ok := ctx.Deadline(); ok {
 		timeout = time.Until(deadline)
 	}
 
 	// Send via Hermes client
-	response, err := client.Request(ctx, serviceReq.Service, message, timeout)
+	response, err := client.RequestWithTimeout(serviceReq.Service, message, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("ZMQ request failed for hub %s: %w", hubID, err)
 	}
@@ -196,7 +191,7 @@ func (z *ZMQProvider) SendFireAndForget(hubID string, message []byte) error {
 	}
 
 	// Send fire-and-forget via Hermes client
-	err := client.FireAndForget(serviceReq.Service, message)
+	err := client.RequestFireAndForget(serviceReq.Service, message, serviceReq.Nonce)
 	if err != nil {
 		return fmt.Errorf("ZMQ fire-and-forget failed for hub %s: %w", hubID, err)
 	}

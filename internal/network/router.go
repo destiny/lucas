@@ -36,7 +36,7 @@ func NewRouter() *Router {
 	return &Router{
 		registry:  NewHubRegistry(),
 		providers: make(map[string]NetworkProvider),
-		logger:    logger.GetLogger("network.router"),
+		logger:    logger.New(),
 	}
 }
 

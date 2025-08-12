@@ -15,6 +15,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -23,13 +24,16 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
+	"lucas/internal/hermes"
 	"lucas/internal/logger"
+	"lucas/internal/network"
 )
 
 // APIServer handles REST API requests
 type APIServer struct {
 	database        *Database
-	brokerService   *BrokerService
+	brokerService   *BrokerService // Keep for hub lifecycle management
+	router          *network.Router // New: Multi-transport routing
 	keys            *GatewayKeys
 	logger          zerolog.Logger
 	server          *http.Server
@@ -39,7 +43,7 @@ type APIServer struct {
 }
 
 // NewAPIServer creates a new API server
-func NewAPIServer(database *Database, brokerService *BrokerService, keys *GatewayKeys, config *GatewayConfig) *APIServer {
+func NewAPIServer(database *Database, brokerService *BrokerService, router *network.Router, keys *GatewayKeys, config *GatewayConfig) *APIServer {
 	jwtService := NewJWTService(config.Security.JWT.SecretKey, config.Security.JWT.Issuer, config.Security.JWT.ExpiryHours)
 	passwordService := NewPasswordService()
 	authMiddleware := NewAuthMiddleware(jwtService, database)
@@ -47,6 +51,7 @@ func NewAPIServer(database *Database, brokerService *BrokerService, keys *Gatewa
 	return &APIServer{
 		database:        database,
 		brokerService:   brokerService,
+		router:          router,
 		keys:            keys,
 		logger:          logger.New(),
 		jwtService:      jwtService,
@@ -532,14 +537,14 @@ func (api *APIServer) handleDeviceAction(w http.ResponseWriter, r *http.Request)
 	deviceAction := json.RawMessage(fmt.Sprintf(`{"type":"%s","action":"%s","parameters":%s}`, 
 		actionReq.Type, actionReq.Action, mustMarshal(actionReq.Parameters)))
 
-	// Send device command via Hermes BrokerService
-	response, err := api.brokerService.SendDeviceCommand(deviceHub.HubID, deviceID, deviceAction)
+	// Send device command via network router (multi-transport)
+	response, err := api.sendDeviceCommandViaRouter(r.Context(), deviceHub.HubID, deviceID, deviceAction)
 	if err != nil {
 		api.logger.Error().
 			Str("hub_id", deviceHub.HubID).
 			Str("device_id", deviceID).
 			Err(err).
-			Msg("Failed to send device command via broker service")
+			Msg("Failed to send device command via network router")
 		api.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to send command to device: %v", err))
 		return
 	}
@@ -593,6 +598,64 @@ func (api *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.sendJSON(w, http.StatusOK, health)
+}
+
+// sendDeviceCommandViaRouter sends a device command using the multi-transport network router
+func (api *APIServer) sendDeviceCommandViaRouter(ctx context.Context, hubID, deviceID string, action json.RawMessage) ([]byte, error) {
+	api.logger.Debug().
+		Str("hub_id", hubID).
+		Str("device_id", deviceID).
+		Msg("Sending device command via network router")
+
+	// Create device command that hub will route internally
+	deviceCommand := map[string]interface{}{
+		"device_id": deviceID,
+		"action":    json.RawMessage(action),
+	}
+
+	deviceCommandBytes, err := json.Marshal(deviceCommand)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal device command: %w", err)
+	}
+
+	// Generate message ID and nonce for request correlation
+	messageID := hermes.GenerateMessageID()
+	nonce := hermes.GenerateNonce()
+
+	// Create service request matching the Hermes protocol
+	deviceRequest := hermes.ServiceRequest{
+		MessageID: messageID,
+		Service:   "hub.control", // Always route through hub.control
+		Action:    "execute",
+		Payload:   json.RawMessage(deviceCommandBytes),
+		Nonce:     nonce,
+	}
+
+	requestBytes, err := json.Marshal(deviceRequest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal service request: %w", err)
+	}
+
+	api.logger.Debug().
+		Str("hub_id", hubID).
+		Str("device_id", deviceID).
+		Str("message_id", messageID).
+		Str("nonce", nonce).
+		Msg("Routing device command via network router")
+
+	// Route via the network router - this will select the appropriate transport
+	response, err := api.router.SendToHub(ctx, hubID, requestBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to route device command to hub %s: %w", hubID, err)
+	}
+
+	api.logger.Debug().
+		Str("hub_id", hubID).
+		Str("device_id", deviceID).
+		Str("message_id", messageID).
+		Msg("Device command routed successfully")
+
+	return response, nil
 }
 
 // Helper functions

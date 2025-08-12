@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,6 +29,8 @@ import (
 	"github.com/spf13/cobra"
 	"lucas/internal/gateway"
 	"lucas/internal/logger"
+	"lucas/internal/network"
+	"lucas/internal/network/zmq"
 )
 
 var (
@@ -85,17 +88,42 @@ The gateway provides a central point for managing distributed IoT devices across
 			Str("public_key", keys.GetServerPublicKey()).
 			Msg("Gateway keys loaded")
 
-		// Initialize Hermes Broker Service
-		brokerService := gateway.NewBrokerService(config.Server.ZMQ.Address, keys, database)
+		// Initialize network router for multi-transport support
+		router := network.NewRouter()
 
-		// Initialize API server with JWT configuration from config
-		apiServer := gateway.NewAPIServer(database, brokerService, keys, config)
+		// Create ZMQ provider with gateway keys
+		zmqKeys := &zmq.ZMQKeys{
+			PublicKey:  keys.GetServerPublicKey(),
+			PrivateKey: keys.GetServerPrivateKey(),
+		}
+		zmqProvider := zmq.NewZMQProvider(config.Server.ZMQ.Address, zmqKeys)
+
+		// Register ZMQ provider with router
+		if err := router.RegisterProvider(zmqProvider); err != nil {
+			log.Error().Err(err).Msg("Failed to register ZMQ provider")
+			return fmt.Errorf("failed to register ZMQ provider: %w", err)
+		}
+
+		// Initialize Hermes Broker Service (keep for hub lifecycle management)
+		brokerService := gateway.NewBrokerService(config.Server.ZMQ.Address, keys, database, router)
+
+		// Initialize API server with network router
+		apiServer := gateway.NewAPIServer(database, brokerService, router, keys, config)
 
 		// Start services
 		var wg sync.WaitGroup
-		errChan := make(chan error, 2)
+		errChan := make(chan error, 3)
 
-		// Start Hermes Broker Service
+		// Start network router (all providers)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := router.StartAll(context.Background()); err != nil {
+				errChan <- fmt.Errorf("Network router error: %w", err)
+			}
+		}()
+
+		// Start Hermes Broker Service (for hub lifecycle)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -130,12 +158,16 @@ The gateway provides a central point for managing distributed IoT devices across
 		// Shutdown services
 		log.Info().Msg("Shutting down gateway services")
 
+		if err := apiServer.Stop(); err != nil {
+			log.Error().Err(err).Msg("Error stopping API server")
+		}
+
 		if err := brokerService.Stop(); err != nil {
 			log.Error().Err(err).Msg("Error stopping Broker service")
 		}
 
-		if err := apiServer.Stop(); err != nil {
-			log.Error().Err(err).Msg("Error stopping API server")
+		if err := router.StopAll(); err != nil {
+			log.Error().Err(err).Msg("Error stopping network router")
 		}
 
 		log.Info().Msg("Gateway daemon stopped")

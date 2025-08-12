@@ -25,6 +25,7 @@ import (
 	"github.com/rs/zerolog"
 	"lucas/internal/hermes"
 	"lucas/internal/logger"
+	"lucas/internal/network"
 )
 
 // BrokerService integrates Hermes broker with gateway functionality
@@ -33,6 +34,7 @@ type BrokerService struct {
 	registry    *ServiceRegistry
 	database    *Database
 	keys        *GatewayKeys
+	router      *network.Router // Network router for transport registration
 	logger      zerolog.Logger
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -99,7 +101,7 @@ type HubServiceHandler struct {
 }
 
 // NewBrokerService creates a new broker service
-func NewBrokerService(address string, keys *GatewayKeys, database *Database) *BrokerService {
+func NewBrokerService(address string, keys *GatewayKeys, database *Database, router *network.Router) *BrokerService {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	bs := &BrokerService{
@@ -107,6 +109,7 @@ func NewBrokerService(address string, keys *GatewayKeys, database *Database) *Br
 		registry:    NewServiceRegistry(),
 		database:    database,
 		keys:        keys,
+		router:      router,
 		logger:      logger.New(),
 		ctx:         ctx,
 		cancel:      cancel,
@@ -525,6 +528,19 @@ func (bs *BrokerService) processHubWorkerRegistration(hubID, serviceName string)
 	bs.mutex.Lock()
 	bs.hubHandlers[hubID] = handler
 	bs.mutex.Unlock()
+
+	// Register hub with network router (currently using ZMQ)
+	if err := bs.router.RegisterHubTransport(hubID, "zmq"); err != nil {
+		bs.logger.Error().
+			Str("hub_id", hubID).
+			Err(err).
+			Msg("Failed to register hub transport with router")
+	} else {
+		bs.logger.Info().
+			Str("hub_id", hubID).
+			Str("transport", "zmq").
+			Msg("Hub transport registered with network router")
+	}
 
 	bs.logger.Info().
 		Str("hub_id", hubID).
