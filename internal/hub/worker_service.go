@@ -159,8 +159,13 @@ func (ws *WorkerService) Stop() error {
 
 // registerHubWorker registers the hub as a single Hermes worker
 func (ws *WorkerService) registerHubWorker() error {
+	// Get transport type from config (defaults to "zmq" if not set)
+	transport := ws.config.GetTransport()
+	
 	ws.logger.Info().
 		Int("device_count", len(ws.config.Devices)).
+		Str("transport", transport).
+		Str("endpoint", ws.config.Gateway.Endpoint).
 		Msg("Registering hub worker")
 
 	// Use hub service name and hub ID as worker identity
@@ -175,7 +180,21 @@ func (ws *WorkerService) registerHubWorker() error {
 		stats:     &ServiceHandlerStats{},
 	}
 
-	// Create Hermes worker
+	// TODO: Future enhancement - create different worker types based on transport
+	// For now, Hermes only supports ZMQ, but endpoint may vary
+	// When CoAP/HTTP support is added, create appropriate worker type here
+	switch transport {
+	case "zmq":
+		// Create ZMQ-based Hermes worker (current implementation)
+	case "coap":
+		ws.logger.Warn().Msg("CoAP transport configured but not yet implemented, falling back to ZMQ")
+	case "http":
+		ws.logger.Warn().Msg("HTTP transport configured but not yet implemented, falling back to ZMQ")
+	default:
+		ws.logger.Warn().Str("transport", transport).Msg("Unknown transport type, using ZMQ")
+	}
+
+	// Create Hermes worker (currently ZMQ-only)
 	worker := hermes.NewWorker(
 		ws.config.Gateway.Endpoint,
 		serviceName,
@@ -199,6 +218,8 @@ func (ws *WorkerService) registerHubWorker() error {
 	ws.logger.Info().
 		Str("service", serviceName).
 		Str("worker_identity", workerIdentity).
+		Str("transport", transport).
+		Str("endpoint", ws.config.Gateway.Endpoint).
 		Msg("Hub worker registered")
 
 	return nil

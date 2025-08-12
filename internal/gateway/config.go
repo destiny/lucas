@@ -25,6 +25,7 @@ import (
 // GatewayConfig represents the complete gateway configuration
 type GatewayConfig struct {
 	Server   ServerConfig   `yaml:"server"`
+	Network  NetworkConfig  `yaml:"network"`
 	Database DatabaseConfig `yaml:"database"`
 	Keys     KeysConfig     `yaml:"keys"`
 	Logging  LoggingConfig  `yaml:"logging"`
@@ -98,6 +99,24 @@ type RateLimiting struct {
 	RequestsPerMinute int  `yaml:"requests_per_minute"`
 }
 
+// NetworkConfig contains network transport provider settings
+type NetworkConfig struct {
+	Providers NetworkProvidersConfig `yaml:"providers"`
+}
+
+// NetworkProvidersConfig contains settings for each network provider
+type NetworkProvidersConfig struct {
+	ZMQ  ProviderConfig `yaml:"zmq"`
+	CoAP ProviderConfig `yaml:"coap"`
+	HTTP ProviderConfig `yaml:"http"`
+}
+
+// ProviderConfig contains settings for a specific network provider
+type ProviderConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Endpoint string `yaml:"endpoint"`
+}
+
 // LoadGatewayConfig loads configuration from a YAML file
 func LoadGatewayConfig(filepath string) (*GatewayConfig, error) {
 	data, err := os.ReadFile(filepath)
@@ -168,6 +187,22 @@ func NewDefaultGatewayConfig() *GatewayConfig {
 			Level:  "info",
 			Format: "json",
 			File:   "gateway.log",
+		},
+		Network: NetworkConfig{
+			Providers: NetworkProvidersConfig{
+				ZMQ: ProviderConfig{
+					Enabled:  true,
+					Endpoint: "tcp://*:5555", // Use same as Server.ZMQ.Address default
+				},
+				CoAP: ProviderConfig{
+					Enabled:  false,
+					Endpoint: "coap://0.0.0.0:5683",
+				},
+				HTTP: ProviderConfig{
+					Enabled:  false,
+					Endpoint: "http://0.0.0.0:8081",
+				},
+			},
 		},
 		Security: SecurityConfig{
 			APIKeyRequired: false,

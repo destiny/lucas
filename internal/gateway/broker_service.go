@@ -529,16 +529,20 @@ func (bs *BrokerService) processHubWorkerRegistration(hubID, serviceName string)
 	bs.hubHandlers[hubID] = handler
 	bs.mutex.Unlock()
 
-	// Register hub with network router (currently using ZMQ)
-	if err := bs.router.RegisterHubTransport(hubID, "zmq"); err != nil {
+	// Register hub with network router
+	// For now, assume ZMQ since Hermes workers are ZMQ-based
+	// TODO: In the future, detect transport type from hub registration info
+	transport := "zmq"
+	if err := bs.router.RegisterHubTransport(hubID, transport); err != nil {
 		bs.logger.Error().
 			Str("hub_id", hubID).
+			Str("transport", transport).
 			Err(err).
 			Msg("Failed to register hub transport with router")
 	} else {
 		bs.logger.Info().
 			Str("hub_id", hubID).
-			Str("transport", "zmq").
+			Str("transport", transport).
 			Msg("Hub transport registered with network router")
 	}
 

@@ -33,6 +33,7 @@ type Config struct {
 type GatewayConfig struct {
 	Endpoint  string `yaml:"endpoint"`
 	PublicKey string `yaml:"public_key"`
+	Transport string `yaml:"transport"` // Network transport to use (zmq, coap, http) - defaults to "zmq"
 }
 
 // HubConfig contains hub identity and keys
@@ -81,6 +82,24 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.PublicKey == "" {
 		return fmt.Errorf("gateway.public_key is required")
+	}
+	
+	// Set default transport if not specified
+	if c.Gateway.Transport == "" {
+		c.Gateway.Transport = "zmq"
+	}
+	
+	// Validate transport type
+	validTransports := []string{"zmq", "coap", "http"}
+	transportValid := false
+	for _, transport := range validTransports {
+		if c.Gateway.Transport == transport {
+			transportValid = true
+			break
+		}
+	}
+	if !transportValid {
+		return fmt.Errorf("invalid gateway.transport: %s (must be one of: %v)", c.Gateway.Transport, validTransports)
 	}
 
 	// Validate hub config
@@ -172,6 +191,7 @@ func NewConfigWithKeys(gatewayEndpoint, gatewayPublicKey string) (*Config, error
 		Gateway: GatewayConfig{
 			Endpoint:  gatewayEndpoint,
 			PublicKey: gatewayPublicKey,
+			Transport: "zmq", // Default to ZMQ for backward compatibility
 		},
 		Hub: HubConfig{
 			ID:         generateHubIDString(),
@@ -236,12 +256,21 @@ func (c *Config) UpdateGatewayInfo(endpoint, publicKey string) {
 	}
 }
 
+// GetTransport returns the network transport type for this hub (defaults to "zmq")
+func (c *Config) GetTransport() string {
+	if c.Gateway.Transport == "" {
+		return "zmq" // Default to ZMQ for backward compatibility
+	}
+	return c.Gateway.Transport
+}
+
 // NewDefaultConfig creates a default configuration template
 func NewDefaultConfig() *Config {
 	return &Config{
 		Gateway: GatewayConfig{
 			Endpoint:  "tcp://gateway.example.com:5555",
 			PublicKey: "gateway_public_key_here",
+			Transport: "zmq", // Default to ZMQ
 		},
 		Hub: HubConfig{
 			ID:         "lucas_hub",

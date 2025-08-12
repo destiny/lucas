@@ -91,17 +91,10 @@ The gateway provides a central point for managing distributed IoT devices across
 		// Initialize network router for multi-transport support
 		router := network.NewRouter()
 
-		// Create ZMQ provider with gateway keys
-		zmqKeys := &zmq.ZMQKeys{
-			PublicKey:  keys.GetServerPublicKey(),
-			PrivateKey: keys.GetServerPrivateKey(),
-		}
-		zmqProvider := zmq.NewZMQProvider(config.Server.ZMQ.Address, zmqKeys)
-
-		// Register ZMQ provider with router
-		if err := router.RegisterProvider(zmqProvider); err != nil {
-			log.Error().Err(err).Msg("Failed to register ZMQ provider")
-			return fmt.Errorf("failed to register ZMQ provider: %w", err)
+		// Configure and register network providers based on config
+		if err := setupNetworkProviders(router, config, keys, log); err != nil {
+			log.Error().Err(err).Msg("Failed to setup network providers")
+			return fmt.Errorf("failed to setup network providers: %w", err)
 		}
 
 		// Initialize Hermes Broker Service (keep for hub lifecycle management)
@@ -587,6 +580,83 @@ func displayVerboseStatus(cmd *cobra.Command, config *gateway.GatewayConfig, con
 	encoder := json.NewEncoder(cmd.OutOrStdout())
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(result)
+}
+
+// setupNetworkProviders configures and registers network providers based on config
+func setupNetworkProviders(router *network.Router, config *gateway.GatewayConfig, keys *gateway.GatewayKeys, log zerolog.Logger) error {
+	enabledCount := 0
+
+	// Setup ZMQ provider if enabled
+	if config.Network.Providers.ZMQ.Enabled {
+		endpoint := config.Network.Providers.ZMQ.Endpoint
+		// Fallback to legacy ZMQ config if network endpoint is empty
+		if endpoint == "" {
+			endpoint = config.Server.ZMQ.Address
+		}
+
+		zmqKeys := &zmq.ZMQKeys{
+			PublicKey:  keys.GetServerPublicKey(),
+			PrivateKey: keys.GetServerPrivateKey(),
+		}
+		zmqProvider := zmq.NewZMQProvider(endpoint, zmqKeys)
+
+		if err := router.RegisterProvider(zmqProvider); err != nil {
+			return fmt.Errorf("failed to register ZMQ provider: %w", err)
+		}
+
+		log.Info().
+			Str("provider", "zmq").
+			Str("endpoint", endpoint).
+			Msg("ZMQ provider registered")
+		enabledCount++
+	}
+
+	// Setup CoAP provider if enabled (placeholder for future implementation)
+	if config.Network.Providers.CoAP.Enabled {
+		log.Warn().
+			Str("provider", "coap").
+			Msg("CoAP provider requested but not yet implemented")
+		// TODO: Add CoAP provider when implemented
+		// coapProvider := coap.NewCoAPProvider(config.Network.Providers.CoAP.Endpoint)
+		// router.RegisterProvider(coapProvider)
+	}
+
+	// Setup HTTP provider if enabled (placeholder for future implementation)
+	if config.Network.Providers.HTTP.Enabled {
+		log.Warn().
+			Str("provider", "http").
+			Msg("HTTP provider requested but not yet implemented")
+		// TODO: Add HTTP provider when implemented
+		// httpProvider := http.NewHTTPProvider(config.Network.Providers.HTTP.Endpoint)
+		// router.RegisterProvider(httpProvider)
+	}
+
+	if enabledCount == 0 {
+		// No providers enabled, enable ZMQ as default for backward compatibility
+		log.Info().Msg("No network providers configured, enabling ZMQ as default")
+		
+		zmqKeys := &zmq.ZMQKeys{
+			PublicKey:  keys.GetServerPublicKey(),
+			PrivateKey: keys.GetServerPrivateKey(),
+		}
+		zmqProvider := zmq.NewZMQProvider(config.Server.ZMQ.Address, zmqKeys)
+
+		if err := router.RegisterProvider(zmqProvider); err != nil {
+			return fmt.Errorf("failed to register default ZMQ provider: %w", err)
+		}
+
+		log.Info().
+			Str("provider", "zmq").
+			Str("endpoint", config.Server.ZMQ.Address).
+			Msg("Default ZMQ provider registered")
+		enabledCount++
+	}
+
+	log.Info().
+		Int("enabled_providers", enabledCount).
+		Msg("Network providers setup complete")
+
+	return nil
 }
 
 // Gateway command initialization moved to root.go to avoid circular import issues
