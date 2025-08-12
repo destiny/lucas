@@ -3,7 +3,7 @@
 
 meta:
   system: lucas-smart-home
-  version: "25.6.2"
+  version: "25.3.01"
   purpose: "Simple home automation proxy for secure external access"
   origin: "TV remote control client evolved into household device gateway"
   components: [gateway, hub, web-ui]
@@ -459,6 +459,46 @@ deployment:
   architecture: "Simple proxy - 1 gateway : N household hubs : M local devices"
   security_model: "Gateway exposed to internet, hubs stay internal"
   typical_setup: "Gateway on VPS, hubs on home networks"
+
+# Release Process
+release:
+  versioning_scheme: "Calendar Versioning (CalVer) - YY.Q.NN format"
+  format_explanation:
+    YY: "Two-digit year (e.g., 25 for 2025)"
+    Q: "Quarter number (1, 2, 3, 4)"
+    NN: "Sequential number within quarter (01, 02, 03...)"
+  examples:
+    - "25.3.01 - First release of Q3 2025"
+    - "25.3.02 - Second release of Q3 2025"
+    - "25.4.01 - First release of Q4 2025"
+    - "26.1.01 - First release of Q1 2026"
+  
+  workflow:
+    branching: "GitHub Flow - main branch always deployable"
+    development: "feature/* → develop → main"
+    release_trigger: "Git tag push (e.g., git tag v25.3.01)"
+    automation: "GitHub Actions builds cross-platform binaries"
+    
+  build_process:
+    web_ui: "Node.js + npm build (Svelte/TypeScript)"
+    asset_embedding: "go generate ./internal/gateway"
+    cross_compile: "CGO-enabled for ZMQ support"
+    platforms: [darwin/arm64, linux/amd64, linux/arm64]
+    
+  release_steps: |
+    1. Merge features to develop branch
+    2. Test integration on develop
+    3. Merge develop → main when ready
+    4. Tag release: git tag vYY.Q.NN -m "Release message"
+    5. Push tag: git push origin vYY.Q.NN
+    6. GitHub Actions builds automatically
+    7. Add release notes manually (GA status noted here)
+    
+  automation:
+    github_actions: ".github/workflows/release.yml"
+    trigger: "push: tags: ['v*']"
+    cost: "Free for public repos, minimal for private"
+    build_time: "~5 minutes for 3 platform builds"
   
 # Common Issues
 troubleshooting:
