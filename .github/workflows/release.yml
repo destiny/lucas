@@ -1,0 +1,56 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+          - goos: linux  
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      # Node.js for web build
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+      
+      # Go for generate and build
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23'
+      
+      # Run go generate to build web assets
+      - name: Generate web assets
+        run: go generate ./internal/gateway
+      
+      # Cross-compile with CGO support
+      - name: Cross-compile binary
+        uses: crazy-max/ghaction-xgo@v3
+        with:
+          go_version: 1.23
+          dest: dist
+          prefix: lucas
+          targets: ${{ matrix.goos }}/${{ matrix.goarch }}
+          ldflags: -s -w -X main.version=${{ github.ref_name }}
+      
+      # Upload binaries to release
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*
+          generate_release_notes: true
