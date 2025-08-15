@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pebbe/zmq4"
+	"github.com/destiny/zmq4/v25"
 	"github.com/rs/zerolog"
 	"lucas/internal/logger"
 )
@@ -61,7 +61,7 @@ type BrokerPendingRequest struct {
 // Broker implements the Hermes Majordomo Protocol broker
 type Broker struct {
 	address       string
-	socket        *zmq4.Socket
+	socket        zmq4.Socket
 	services      map[string]*BrokerService
 	workers       map[string]*BrokerWorker
 	clients       map[string]time.Time
@@ -107,32 +107,15 @@ func (b *Broker) Start() error {
 		Msg("Starting Hermes broker")
 
 	// Create ROUTER socket
-	socket, err := zmq4.NewSocket(zmq4.ROUTER)
-	if err != nil {
-		return fmt.Errorf("failed to create ROUTER socket: %w", err)
-	}
+	socket := zmq4.NewRouter(b.ctx)
 
-	defer func() {
-		if err != nil {
-			socket.Close()
-		}
-	}()
-
-	// Set socket options
-	if err = socket.SetLinger(1000); err != nil {
-		return fmt.Errorf("failed to set linger: %w", err)
-	}
-
-	if err = socket.SetRcvhwm(1000); err != nil {
-		return fmt.Errorf("failed to set receive high watermark: %w", err)
-	}
-
-	if err = socket.SetSndhwm(1000); err != nil {
-		return fmt.Errorf("failed to set send high watermark: %w", err)
+	// Set high watermark option if available
+	if err := socket.SetOption(zmq4.OptionHWM, 1000); err != nil {
+		b.logger.Warn().Err(err).Msg("Failed to set high watermark - continuing without it")
 	}
 
 	// Bind to address
-	if err = socket.Bind(b.address); err != nil {
+	if err := socket.Listen(b.address); err != nil {
 		return fmt.Errorf("failed to bind to address: %w", err)
 	}
 
@@ -177,13 +160,19 @@ func (b *Broker) messageLoop() {
 			return
 		default:
 			// Receive multipart message
-			msg, err := b.socket.RecvMessageBytes(zmq4.DONTWAIT)
+			rawMsg, err := b.socket.Recv()
 			if err != nil {
 				if err.Error() != "resource temporarily unavailable" {
 					b.logger.Error().Err(err).Msg("Failed to receive message")
 				}
 				time.Sleep(10 * time.Millisecond) // Small sleep to prevent busy waiting
 				continue
+			}
+			
+			// Convert message to bytes
+			msg := make([][]byte, len(rawMsg.Frames))
+			for i, frame := range rawMsg.Frames {
+				msg[i] = frame
 			}
 
 			if len(msg) < 3 {
@@ -503,7 +492,7 @@ func (b *Broker) sendHeartbeatResponse(workerID string) error {
 		return fmt.Errorf("failed to serialize heartbeat response: %w", err)
 	}
 
-	_, err = b.socket.SendMessage(workerID, "", msgBytes)
+	err = b.socket.Send(zmq4.NewMsgFrom([]byte(workerID), []byte(""), msgBytes))
 	if err != nil {
 		return fmt.Errorf("failed to send heartbeat response to worker: %w", err)
 	}
@@ -541,7 +530,7 @@ func (b *Broker) sendReregistrationRequest(workerID string) error {
 		return fmt.Errorf("failed to serialize re-registration request: %w", err)
 	}
 
-	_, err = b.socket.SendMessage(workerID, "", msgBytes)
+	err = b.socket.Send(zmq4.NewMsgFrom([]byte(workerID), []byte(""), msgBytes))
 	if err != nil {
 		return fmt.Errorf("failed to send re-registration request to worker: %w", err)
 	}
@@ -696,7 +685,7 @@ func (b *Broker) sendToWorker(workerID, clientID string, body []byte) error {
 		return fmt.Errorf("failed to serialize worker message: %w", err)
 	}
 
-	_, err = b.socket.SendMessage(workerID, "", msgBytes)
+	err = b.socket.Send(zmq4.NewMsgFrom([]byte(workerID), []byte(""), msgBytes))
 	if err != nil {
 		return fmt.Errorf("failed to send message to worker: %w", err)
 	}
@@ -717,7 +706,7 @@ func (b *Broker) sendToClient(clientID string, body []byte) error {
 		return nil
 	}
 
-	_, err := b.socket.SendMessage(clientID, "", body)
+	err := b.socket.Send(zmq4.NewMsgFrom([]byte(clientID), []byte(""), body))
 	if err != nil {
 		return fmt.Errorf("failed to send message to client: %w", err)
 	}

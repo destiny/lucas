@@ -132,25 +132,26 @@ func NewServiceRegistry() *ServiceRegistry {
 func (bs *BrokerService) Start() error {
 	bs.logger.Info().Msg("Starting Gateway Broker Service")
 
-	// Start persistent client first
-	bs.clientMutex.Lock()
-	if err := bs.client.Start(); err != nil {
-		bs.clientMutex.Unlock()
-		return fmt.Errorf("failed to start persistent client: %w", err)
-	}
-	bs.clientMutex.Unlock()
-
 	// Set broker service reference for immediate device list processing
 	bs.broker.SetBrokerService(bs)
 
-	// Start Hermes broker
+	// Start Hermes broker FIRST (must be listening before client connects)
 	if err := bs.broker.Start(); err != nil {
-		// Stop client if broker fails
-		bs.clientMutex.Lock()
-		bs.client.Stop()
-		bs.clientMutex.Unlock()
 		return fmt.Errorf("failed to start Hermes broker: %w", err)
 	}
+
+	// Add a small delay to ensure broker is fully ready
+	time.Sleep(100 * time.Millisecond)
+
+	// Start persistent client AFTER broker is listening
+	bs.clientMutex.Lock()
+	if err := bs.client.Start(); err != nil {
+		bs.clientMutex.Unlock()
+		// Stop broker if client fails
+		bs.broker.Stop()
+		return fmt.Errorf("failed to start persistent client: %w", err)
+	}
+	bs.clientMutex.Unlock()
 
 	// Hub services will announce themselves when they connect
 

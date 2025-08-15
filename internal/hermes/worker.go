@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pebbe/zmq4"
+	"github.com/destiny/zmq4/v25"
 	"github.com/rs/zerolog"
 	"lucas/internal/logger"
 )
@@ -43,7 +43,7 @@ type HermesWorker struct {
 	broker          string
 	service         string
 	identity        string
-	socket          *zmq4.Socket
+	socket          zmq4.Socket
 	heartbeat       time.Duration
 	reconnect       time.Duration
 	liveness        int
@@ -157,7 +157,7 @@ func (w *HermesWorker) Stop() error {
 	return nil
 }
 
-// connect establishes connection to the broker
+// connect establishes connection to the broker with retry logic
 func (w *HermesWorker) connect() error {
 	w.mutex.Lock()
 	w.state = WorkerStateConnecting
@@ -167,52 +167,65 @@ func (w *HermesWorker) connect() error {
 		Str("broker", w.broker).
 		Msg("Connecting to Hermes broker")
 
-	// Create DEALER socket
-	socket, err := zmq4.NewSocket(zmq4.DEALER)
-	if err != nil {
-		return fmt.Errorf("failed to create DEALER socket: %w", err)
+	maxRetries := 10
+	baseDelay := 250 * time.Millisecond
+	
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := time.Duration(attempt) * baseDelay
+			w.logger.Warn().
+				Int("attempt", attempt+1).
+				Int("max_retries", maxRetries).
+				Dur("delay", delay).
+				Msg("Retrying broker connection")
+			time.Sleep(delay)
+		}
+
+		// Create DEALER socket
+		socket := zmq4.NewDealer(w.ctx)
+
+		// Set high watermark option if available
+		if err := socket.SetOption(zmq4.OptionHWM, 1000); err != nil {
+			w.logger.Warn().Err(err).Msg("Failed to set high watermark - continuing without it")
+		}
+
+		// Connect to broker
+		if err := socket.Dial(w.broker); err != nil {
+			socket.Close()
+			if attempt == maxRetries-1 {
+				return fmt.Errorf("failed to connect to broker after %d attempts: %w", maxRetries, err)
+			}
+			w.logger.Warn().
+				Err(err).
+				Int("attempt", attempt+1).
+				Msg("Failed to connect to broker, will retry")
+			continue
+		}
+
+		w.socket = socket
+		w.liveness = 10
+
+		// Send READY message to register with broker
+		if err := w.sendReady(); err != nil {
+			socket.Close()
+			w.socket = nil
+			if attempt == maxRetries-1 {
+				return fmt.Errorf("failed to send READY message after %d attempts: %w", maxRetries, err)
+			}
+			w.logger.Warn().
+				Err(err).
+				Int("attempt", attempt+1).
+				Msg("Failed to send READY message, will retry")
+			continue
+		}
+
+		w.logger.Info().
+			Int("attempt", attempt+1).
+			Msg("Connected to Hermes broker and ready for requests")
+		return nil
 	}
 
-	// Set socket identity
-	if err = socket.SetIdentity(w.identity); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to set socket identity: %w", err)
-	}
-
-	// Set socket options
-	if err = socket.SetLinger(1000); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to set linger: %w", err)
-	}
-
-	// Set receive timeout to be longer than heartbeat interval to avoid premature timeouts
-	// Use 1.5x heartbeat interval to account for network delays and jitter
-	receiveTimeout := time.Duration(float64(w.heartbeat) * 1.5)
-	if err = socket.SetRcvtimeo(receiveTimeout); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to set receive timeout: %w", err)
-	}
-
-	if err = socket.SetSndtimeo(30 * time.Second); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to set send timeout: %w", err)
-	}
-
-	// Connect to broker
-	if err = socket.Connect(w.broker); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to connect to broker: %w", err)
-	}
-
-	w.socket = socket
-	w.liveness = 10
-
-	// Send READY message to register with broker
-	if err = w.sendReady(); err != nil {
-		socket.Close()
-		w.socket = nil
-		return fmt.Errorf("failed to send READY message: %w", err)
-	}
+	return fmt.Errorf("failed to connect to broker after %d attempts", maxRetries)
 
 	w.mutex.Lock()
 	w.state = WorkerStateReady
@@ -238,7 +251,7 @@ func (w *HermesWorker) messageLoop() {
 			}
 
 			// Receive message from broker (non-blocking to prevent hang)
-			msg, err := w.socket.RecvMessageBytes(zmq4.DONTWAIT)
+			rawMsg, err := w.socket.Recv()
 			if err != nil {
 				if err.Error() == "resource temporarily unavailable" {
 					// No message available - normal with non-blocking mode
@@ -259,6 +272,12 @@ func (w *HermesWorker) messageLoop() {
 				w.logger.Error().Err(err).Msg("Worker failed to receive message from broker")
 				w.reconnectToBroker()
 				continue
+			}
+			
+			// Convert message to bytes
+			msg := make([][]byte, len(rawMsg.Frames))
+			for i, frame := range rawMsg.Frames {
+				msg[i] = frame
 			}
 
 			w.logger.Debug().
@@ -445,7 +464,7 @@ func (w *HermesWorker) sendReady() error {
 		return fmt.Errorf("failed to serialize READY message: %w", err)
 	}
 
-	_, err = w.socket.SendMessage("", msgBytes)
+	err = w.socket.Send(zmq4.NewMsgFrom([]byte(""), msgBytes))
 	if err != nil {
 		return fmt.Errorf("failed to send READY message: %w", err)
 	}
@@ -475,7 +494,7 @@ func (w *HermesWorker) sendReply(clientID string, body []byte) error {
 		return fmt.Errorf("failed to serialize REPLY message: %w", err)
 	}
 
-	_, err = w.socket.SendMessage("", msgBytes)
+	err = w.socket.Send(zmq4.NewMsgFrom([]byte(""), msgBytes))
 	if err != nil {
 		return fmt.Errorf("failed to send REPLY message: %w", err)
 	}
@@ -504,7 +523,7 @@ func (w *HermesWorker) sendHeartbeat() error {
 		return fmt.Errorf("failed to serialize HEARTBEAT message: %w", err)
 	}
 
-	_, err = w.socket.SendMessage("", msgBytes)
+	err = w.socket.Send(zmq4.NewMsgFrom([]byte(""), msgBytes))
 	if err != nil {
 		return fmt.Errorf("failed to send HEARTBEAT message: %w", err)
 	}
@@ -538,7 +557,7 @@ func (w *HermesWorker) sendDisconnect() error {
 		return nil // Don't fail shutdown on serialization error
 	}
 
-	_, err = w.socket.SendMessage("", msgBytes)
+	err = w.socket.Send(zmq4.NewMsgFrom([]byte(""), msgBytes))
 	if err != nil {
 		w.logger.Error().Err(err).Msg("Failed to send DISCONNECT message")
 		return nil // Don't fail shutdown on send error

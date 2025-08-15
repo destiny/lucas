@@ -22,7 +22,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/pebbe/zmq4"
+	"github.com/destiny/zmq4/v25/security/curve"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,9 +40,21 @@ type HubKeys struct {
 
 // GenerateHubKeyPair generates a new CurveZMQ key pair for the hub
 func GenerateHubKeyPair() (*HubKeyPair, error) {
-	publicKey, privateKey, err := zmq4.NewCurveKeypair()
+	// Use the proper CurveZMQ key generation from the library
+	keyPair, err := curve.GenerateKeyPair()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate CurveZMQ keypair: %w", err)
+	}
+	
+	// Convert to Z85 format
+	publicKey, err := keyPair.PublicKeyZ85()
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode public key: %w", err)
+	}
+	
+	privateKey, err := keyPair.SecretKeyZ85()
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode private key: %w", err)
 	}
 
 	return &HubKeyPair{
@@ -192,10 +204,9 @@ func ValidateCurveKey(key string) error {
 		return fmt.Errorf("invalid key length: expected 40, got %d", len(key))
 	}
 
-	// Try to decode as Z85 to validate format
-	decoded := zmq4.Z85decode(key)
-	if len(decoded) != 32 { // Z85 decoded should be 32 bytes for CurveZMQ key
-		return fmt.Errorf("invalid Z85 encoding or decoded key length")
+	// Try to decode as Z85 to validate format using the curve package validation
+	if err := curve.ValidateZ85Key(key); err != nil {
+		return fmt.Errorf("invalid CurveZMQ key: %w", err)
 	}
 
 	return nil

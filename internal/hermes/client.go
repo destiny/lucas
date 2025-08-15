@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pebbe/zmq4"
+	"github.com/destiny/zmq4/v25"
 	"github.com/rs/zerolog"
 	"lucas/internal/logger"
 )
@@ -55,7 +55,7 @@ type ClientStats struct {
 type HermesClient struct {
 	broker       string
 	identity     string
-	socket       *zmq4.Socket
+	socket       zmq4.Socket
 	timeout      time.Duration
 	retries      int
 	pending      map[string]*PendingClientRequest  // Keyed by message ID
@@ -153,49 +153,55 @@ func (c *HermesClient) Stop() error {
 	return nil
 }
 
-// connect establishes connection to the broker
+// connect establishes connection to the broker with retry logic
 func (c *HermesClient) connect() error {
 	c.logger.Info().
 		Str("broker", c.broker).
 		Msg("Connecting to Hermes broker")
 
-	// Create REQ socket for synchronous request-response
-	socket, err := zmq4.NewSocket(zmq4.DEALER)
-	if err != nil {
-		return fmt.Errorf("failed to create DEALER socket: %w", err)
+	maxRetries := 5
+	baseDelay := 100 * time.Millisecond
+	
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := time.Duration(attempt) * baseDelay
+			c.logger.Warn().
+				Int("attempt", attempt+1).
+				Int("max_retries", maxRetries).
+				Dur("delay", delay).
+				Msg("Retrying broker connection")
+			time.Sleep(delay)
+		}
+
+		// Create DEALER socket for asynchronous request-response
+		socket := zmq4.NewDealer(c.ctx)
+
+		// Set high watermark option if available
+		if err := socket.SetOption(zmq4.OptionHWM, 1000); err != nil {
+			c.logger.Warn().Err(err).Msg("Failed to set high watermark - continuing without it")
+		}
+
+		// Connect to broker
+		if err := socket.Dial(c.broker); err != nil {
+			socket.Close()
+			if attempt == maxRetries-1 {
+				return fmt.Errorf("failed to connect to broker after %d attempts: %w", maxRetries, err)
+			}
+			c.logger.Warn().
+				Err(err).
+				Int("attempt", attempt+1).
+				Msg("Failed to connect to broker, will retry")
+			continue
+		}
+
+		c.socket = socket
+		c.logger.Info().
+			Int("attempt", attempt+1).
+			Msg("Connected to Hermes broker")
+		return nil
 	}
 
-	// Set socket identity
-	if err = socket.SetIdentity(c.identity); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to set socket identity: %w", err)
-	}
-
-	// Set socket options
-	if err = socket.SetLinger(1000); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to set linger: %w", err)
-	}
-
-	if err = socket.SetRcvtimeo(5 * time.Second); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to set receive timeout: %w", err)
-	}
-
-	if err = socket.SetSndtimeo(30 * time.Second); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to set send timeout: %w", err)
-	}
-
-	// Connect to broker
-	if err = socket.Connect(c.broker); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to connect to broker: %w", err)
-	}
-
-	c.socket = socket
-	c.logger.Info().Msg("Connected to Hermes broker")
-	return nil
+	return fmt.Errorf("failed to connect to broker after %d attempts", maxRetries)
 }
 
 // Request sends a synchronous request to a service
@@ -472,7 +478,7 @@ func (c *HermesClient) sendRequest(service, messageID string, body []byte) error
 		return fmt.Errorf("failed to serialize client message: %w", err)
 	}
 
-	_, err = c.socket.SendMessage("", msgBytes)
+	err = c.socket.Send(zmq4.NewMsgFrom([]byte(""), msgBytes))
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
@@ -507,7 +513,7 @@ func (c *HermesClient) messageLoop() {
 			}
 
 			// Receive message from broker (non-blocking)
-			msg, err := c.socket.RecvMessageBytes(zmq4.DONTWAIT)
+			rawMsg, err := c.socket.Recv()
 			if err != nil {
 				if err.Error() == "resource temporarily unavailable" {
 					// No message available - sleep briefly to prevent busy waiting
@@ -517,6 +523,12 @@ func (c *HermesClient) messageLoop() {
 					c.logger.Error().Err(err).Msg("Failed to receive message from broker")
 				}
 				continue
+			}
+			
+			// Convert message to bytes
+			msg := make([][]byte, len(rawMsg.Frames))
+			for i, frame := range rawMsg.Frames {
+				msg[i] = frame
 			}
 
 			c.logger.Debug().
