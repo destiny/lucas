@@ -1,0 +1,145 @@
+name: Cross-Platform Build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Calculate and create next version
+        id: version
+        run: |
+          YEAR=$(date +%y)
+          QUARTER=$(date +"%q")
+          LATEST=$(git tag -l "v${YEAR}.${QUARTER}.*" | sort -V | tail -n1)
+          echo "Debug: Year=$YEAR, Quarter=$QUARTER, Latest tag=$LATEST"
+          
+          if [[ -z "$LATEST" ]]; then
+            NEXT="v${YEAR}.${QUARTER}.01"
+          else
+            NUM=$(echo $LATEST | cut -d. -f3 | sed 's/^0*//')
+            if [[ -z "$NUM" ]]; then NUM=0; fi
+            NEXT_NUM=$((NUM + 1))
+            NEXT="v${YEAR}.${QUARTER}.$(printf "%02d" $NEXT_NUM)"
+          fi
+          
+          echo "Calculated next version: $NEXT"
+          echo "version=$NEXT" >> $GITHUB_OUTPUT
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag $NEXT -m "Release $NEXT - Quarterly release"
+          git push origin $NEXT
+
+  build:
+    runs-on: ubuntu-latest
+    if: always() && !cancelled()
+    needs: [create-release]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23'
+          cache: true
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+      
+      - name: Build web assets
+        run: |
+          cd web
+          npm ci
+          npm run build
+          cd ..
+          
+          # Generate embedded web assets
+          go generate ./internal/gateway
+      
+      - name: Cross-compile binaries
+        run: |
+          VERSION="${{ needs.create-release.outputs.version || github.ref_name }}"
+          echo "Building Lucas binaries for version: $VERSION"
+          
+          mkdir -p dist
+          
+          # Download Go dependencies
+          go mod download
+          
+          # Build for Linux AMD64
+          echo "Building for Linux AMD64..."
+          GOOS=linux GOARCH=amd64 \
+            go build -ldflags="-s -w -X main.version=${VERSION}" \
+            -o dist/lucas-linux-amd64 .
+          
+          # Build for Linux ARM64
+          echo "Building for Linux ARM64..."
+          GOOS=linux GOARCH=arm64 \
+            go build -ldflags="-s -w -X main.version=${VERSION}" \
+            -o dist/lucas-linux-arm64 .
+          
+          # Build for macOS ARM64 (Apple Silicon)
+          echo "Building for macOS ARM64..."
+          GOOS=darwin GOARCH=arm64 \
+            go build -ldflags="-s -w -X main.version=${VERSION}" \
+            -o dist/lucas-darwin-arm64 .
+          
+          # List built binaries
+          ls -la dist/
+          
+          # Verify binaries
+          echo "Binary verification:"
+          for binary in dist/*; do
+            echo "=== $binary ==="
+            file "$binary"
+            ls -lh "$binary"
+          done
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lucas-binaries
+          path: dist/*
+
+  release:
+    runs-on: ubuntu-latest
+    if: always() && !cancelled()
+    needs: [create-release, build]
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      
+      - name: List downloaded files
+        run: ls -la dist/
+      
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*
+          tag_name: ${{ needs.create-release.outputs.version || github.ref_name }}
+          generate_release_notes: true
