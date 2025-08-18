@@ -19,10 +19,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/pebbe/zmq4"
+	"github.com/destiny/zmq4/v25"
 	"github.com/rs/zerolog"
 	"lucas/internal/logger"
 )
@@ -38,12 +39,12 @@ const (
 	WorkerStateReconnecting
 )
 
-// HermesWorker implements the Hermes Majordomo Protocol worker
+// HermesWorker implements the Hermes Majordomo Protocol worker with channel-based architecture
 type HermesWorker struct {
 	broker          string
 	service         string
 	identity        string
-	socket          *zmq4.Socket
+	socket          zmq4.Socket
 	heartbeat       time.Duration
 	reconnect       time.Duration
 	liveness        int
@@ -57,6 +58,14 @@ type HermesWorker struct {
 	requestCount    int
 	reconnectAttempt int           // Track reconnection attempts for backoff
 	maxReconnectDelay time.Duration // Maximum backoff delay
+	
+	// Channel-based architecture
+	messagesCh      chan zmq4.Msg     // Incoming messages from broker
+	heartbeatCh     chan time.Time    // Heartbeat events
+	reconnectCh     chan struct{}     // Reconnection requests
+	shutdownCh      chan struct{}     // Shutdown signal
+	errorsCh        chan error        // Error notifications
+	statsCh         chan *WorkerStats // Stats updates
 }
 
 // WorkerStats represents worker statistics
@@ -74,7 +83,7 @@ type WorkerStats struct {
 	LastHeartbeatReceived time.Time `json:"last_heartbeat_received"`
 }
 
-// NewWorker creates a new Hermes worker
+// NewWorker creates a new Hermes worker with channel-based architecture
 func NewWorker(broker, service, identity string, handler RequestHandler) *HermesWorker {
 	ctx, cancel := context.WithCancel(context.Background())
 	
@@ -83,9 +92,9 @@ func NewWorker(broker, service, identity string, handler RequestHandler) *Hermes
 		service:           service,
 		identity:          identity,
 		handler:           handler,
-		heartbeat:         30 * time.Second, // Default heartbeat interval
-		reconnect:         5 * time.Second,  // Default reconnection interval
-		liveness:          10,               // Default liveness for internet tolerance
+		heartbeat:         GetMDPHeartbeatInterval(), // Use RFC 7/MDP standard interval
+		reconnect:         5 * time.Second,           // Default reconnection interval
+		liveness:          MDP_HEARTBEAT_LIVENESS,    // Use RFC 7/MDP standard liveness
 		state:             WorkerStateDisconnected,
 		ctx:               ctx,
 		cancel:            cancel,
@@ -95,6 +104,13 @@ func NewWorker(broker, service, identity string, handler RequestHandler) *Hermes
 		stats: &WorkerStats{
 			StartTime: time.Now(),
 		},
+		// Initialize channels
+		messagesCh:  make(chan zmq4.Msg, 100),     // Buffered for high throughput
+		heartbeatCh: make(chan time.Time, 10),     // Buffered heartbeat events
+		reconnectCh: make(chan struct{}, 1),       // Single reconnection signal
+		shutdownCh:  make(chan struct{}, 1),       // Single shutdown signal
+		errorsCh:    make(chan error, 50),         // Buffered error notifications
+		statsCh:     make(chan *WorkerStats, 10),  // Buffered stats updates
 	}
 }
 
@@ -112,28 +128,29 @@ func (w *HermesWorker) SetReconnectInterval(interval time.Duration) {
 	w.reconnect = interval
 }
 
-// Start starts the worker
+// Start starts the worker with channel-based architecture
 func (w *HermesWorker) Start() error {
 	w.logger.Info().
 		Str("broker", w.broker).
 		Str("service", w.service).
 		Str("identity", w.identity).
-		Msg("Starting Hermes worker")
+		Msg("Starting Hermes worker with channel-based architecture")
 
 	if err := w.connect(); err != nil {
 		return fmt.Errorf("failed to connect to broker: %w", err)
 	}
 
-	// Start message processing loop
-	go w.messageLoop()
-
-	// Start heartbeat loop
-	go w.heartbeatLoop()
+	// Start channel-based workers
+	go w.socketReader()      // Read from socket and feed messagesCh
+	go w.messageProcessor()  // Process messages from messagesCh
+	go w.heartbeatManager()  // Manage heartbeats using heartbeatCh
+	go w.errorHandler()      // Handle errors from errorsCh
+	go w.statsManager()      // Manage stats updates from statsCh
 
 	return nil
 }
 
-// Stop stops the worker
+// Stop stops the worker and closes all channels
 func (w *HermesWorker) Stop() error {
 	w.logger.Info().Msg("Stopping Hermes worker")
 
@@ -144,6 +161,12 @@ func (w *HermesWorker) Stop() error {
 	// Send disconnect message
 	w.sendDisconnect()
 
+	// Signal shutdown to all channel workers
+	select {
+	case w.shutdownCh <- struct{}{}:
+	default:
+	}
+
 	w.cancel()
 
 	if w.socket != nil {
@@ -153,11 +176,12 @@ func (w *HermesWorker) Stop() error {
 		w.socket = nil
 	}
 
+	// Close channels (done by workers when they see shutdown signal)
 	w.logger.Info().Msg("Hermes worker stopped")
 	return nil
 }
 
-// connect establishes connection to the broker
+// connect establishes connection to the broker with retry logic
 func (w *HermesWorker) connect() error {
 	w.mutex.Lock()
 	w.state = WorkerStateConnecting
@@ -167,52 +191,65 @@ func (w *HermesWorker) connect() error {
 		Str("broker", w.broker).
 		Msg("Connecting to Hermes broker")
 
-	// Create DEALER socket
-	socket, err := zmq4.NewSocket(zmq4.DEALER)
-	if err != nil {
-		return fmt.Errorf("failed to create DEALER socket: %w", err)
+	maxRetries := 10
+	baseDelay := 250 * time.Millisecond
+	
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := time.Duration(attempt) * baseDelay
+			w.logger.Warn().
+				Int("attempt", attempt+1).
+				Int("max_retries", maxRetries).
+				Dur("delay", delay).
+				Msg("Retrying broker connection")
+			time.Sleep(delay)
+		}
+
+		// Create DEALER socket
+		socket := zmq4.NewDealer(w.ctx)
+
+		// Set high watermark option if available
+		if err := socket.SetOption(zmq4.OptionHWM, 1000); err != nil {
+			w.logger.Warn().Err(err).Msg("Failed to set high watermark - continuing without it")
+		}
+
+		// Connect to broker
+		if err := socket.Dial(w.broker); err != nil {
+			socket.Close()
+			if attempt == maxRetries-1 {
+				return fmt.Errorf("failed to connect to broker after %d attempts: %w", maxRetries, err)
+			}
+			w.logger.Warn().
+				Err(err).
+				Int("attempt", attempt+1).
+				Msg("Failed to connect to broker, will retry")
+			continue
+		}
+
+		w.socket = socket
+		w.liveness = 10
+
+		// Send READY message to register with broker
+		if err := w.sendReady(); err != nil {
+			socket.Close()
+			w.socket = nil
+			if attempt == maxRetries-1 {
+				return fmt.Errorf("failed to send READY message after %d attempts: %w", maxRetries, err)
+			}
+			w.logger.Warn().
+				Err(err).
+				Int("attempt", attempt+1).
+				Msg("Failed to send READY message, will retry")
+			continue
+		}
+
+		w.logger.Info().
+			Int("attempt", attempt+1).
+			Msg("Connected to Hermes broker and ready for requests")
+		return nil
 	}
 
-	// Set socket identity
-	if err = socket.SetIdentity(w.identity); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to set socket identity: %w", err)
-	}
-
-	// Set socket options
-	if err = socket.SetLinger(1000); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to set linger: %w", err)
-	}
-
-	// Set receive timeout to be longer than heartbeat interval to avoid premature timeouts
-	// Use 1.5x heartbeat interval to account for network delays and jitter
-	receiveTimeout := time.Duration(float64(w.heartbeat) * 1.5)
-	if err = socket.SetRcvtimeo(receiveTimeout); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to set receive timeout: %w", err)
-	}
-
-	if err = socket.SetSndtimeo(30 * time.Second); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to set send timeout: %w", err)
-	}
-
-	// Connect to broker
-	if err = socket.Connect(w.broker); err != nil {
-		socket.Close()
-		return fmt.Errorf("failed to connect to broker: %w", err)
-	}
-
-	w.socket = socket
-	w.liveness = 10
-
-	// Send READY message to register with broker
-	if err = w.sendReady(); err != nil {
-		socket.Close()
-		w.socket = nil
-		return fmt.Errorf("failed to send READY message: %w", err)
-	}
+	return fmt.Errorf("failed to connect to broker after %d attempts", maxRetries)
 
 	w.mutex.Lock()
 	w.state = WorkerStateReady
@@ -222,82 +259,6 @@ func (w *HermesWorker) connect() error {
 	return nil
 }
 
-// messageLoop processes incoming messages
-func (w *HermesWorker) messageLoop() {
-	w.logger.Info().Msg("Starting Hermes worker message loop")
-
-	for {
-		select {
-		case <-w.ctx.Done():
-			w.logger.Info().Msg("Hermes worker message loop stopping")
-			return
-		default:
-			if w.socket == nil {
-				time.Sleep(w.reconnect)
-				continue
-			}
-
-			// Receive message from broker (non-blocking to prevent hang)
-			msg, err := w.socket.RecvMessageBytes(zmq4.DONTWAIT)
-			if err != nil {
-				if err.Error() == "resource temporarily unavailable" {
-					// No message available - normal with non-blocking mode
-					// Don't decrement liveness here as this is expected behavior
-					w.mutex.RLock()
-					state := w.state
-					w.mutex.RUnlock()
-					
-					if state == WorkerStateDisconnected {
-						continue
-					}
-					
-					// Small sleep to prevent busy waiting while staying responsive
-					time.Sleep(10 * time.Millisecond)
-					continue
-				}
-				
-				w.logger.Error().Err(err).Msg("Worker failed to receive message from broker")
-				w.reconnectToBroker()
-				continue
-			}
-
-			w.logger.Debug().
-				Int("message_parts", len(msg)).
-				Str("service", w.service).
-				Msg("Worker received message from broker")
-
-			if len(msg) < 2 {
-				w.logger.Warn().
-					Int("parts_count", len(msg)).
-					Msg("Received malformed message (insufficient parts)")
-				continue
-			}
-
-			empty := msg[0] // Should be empty frame
-			header := msg[1] // Protocol header
-
-			if len(empty) != 0 {
-				w.logger.Warn().Msg("Received message without empty delimiter")
-				continue
-			}
-
-			w.logger.Debug().
-				Int("parts_count", len(msg)).
-				Str("header_preview", string(header[:min(50, len(header))]) + "...").
-				Msg("Received message from broker")
-
-			// Reset liveness on any valid message
-			w.liveness = 10
-
-			// Parse and handle message
-			if err := w.handleMessage(msg[1:]); err != nil {
-				w.logger.Error().
-					Err(err).
-					Msg("Failed to handle message from broker")
-			}
-		}
-	}
-}
 
 // handleMessage handles a message from the broker
 func (w *HermesWorker) handleMessage(msgParts [][]byte) error {
@@ -445,7 +406,7 @@ func (w *HermesWorker) sendReady() error {
 		return fmt.Errorf("failed to serialize READY message: %w", err)
 	}
 
-	_, err = w.socket.SendMessage("", msgBytes)
+	err = w.socket.Send(zmq4.NewMsgFrom([]byte(""), msgBytes))
 	if err != nil {
 		return fmt.Errorf("failed to send READY message: %w", err)
 	}
@@ -475,7 +436,7 @@ func (w *HermesWorker) sendReply(clientID string, body []byte) error {
 		return fmt.Errorf("failed to serialize REPLY message: %w", err)
 	}
 
-	_, err = w.socket.SendMessage("", msgBytes)
+	err = w.socket.Send(zmq4.NewMsgFrom([]byte(""), msgBytes))
 	if err != nil {
 		return fmt.Errorf("failed to send REPLY message: %w", err)
 	}
@@ -504,7 +465,7 @@ func (w *HermesWorker) sendHeartbeat() error {
 		return fmt.Errorf("failed to serialize HEARTBEAT message: %w", err)
 	}
 
-	_, err = w.socket.SendMessage("", msgBytes)
+	err = w.socket.Send(zmq4.NewMsgFrom([]byte(""), msgBytes))
 	if err != nil {
 		return fmt.Errorf("failed to send HEARTBEAT message: %w", err)
 	}
@@ -538,7 +499,7 @@ func (w *HermesWorker) sendDisconnect() error {
 		return nil // Don't fail shutdown on serialization error
 	}
 
-	_, err = w.socket.SendMessage("", msgBytes)
+	err = w.socket.Send(zmq4.NewMsgFrom([]byte(""), msgBytes))
 	if err != nil {
 		w.logger.Error().Err(err).Msg("Failed to send DISCONNECT message")
 		return nil // Don't fail shutdown on send error
@@ -548,46 +509,6 @@ func (w *HermesWorker) sendDisconnect() error {
 	return nil
 }
 
-// heartbeatLoop sends periodic heartbeats to broker with jitter
-func (w *HermesWorker) heartbeatLoop() {
-	// Add jitter to prevent synchronization issues (±5 seconds)
-	jitter := time.Duration(rand.Intn(10000)-5000) * time.Millisecond
-	interval := w.heartbeat + jitter
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	w.logger.Info().
-		Dur("base_interval", w.heartbeat).
-		Dur("actual_interval", interval).
-		Msg("Starting Hermes worker heartbeat loop with jitter")
-
-	for {
-		select {
-		case <-ticker.C:
-			w.mutex.RLock()
-			state := w.state
-			w.mutex.RUnlock()
-
-			if state == WorkerStateReady && w.socket != nil {
-				if err := w.sendHeartbeat(); err != nil {
-					w.logger.Warn().Err(err).Msg("Failed to send heartbeat")
-					w.liveness--
-					if w.liveness <= 0 {
-						w.reconnectToBroker()
-					}
-				}
-			}
-			
-			// Update ticker with new jitter to avoid long-term synchronization
-			jitter := time.Duration(rand.Intn(10000)-5000) * time.Millisecond
-			newInterval := w.heartbeat + jitter
-			ticker.Reset(newInterval)
-		case <-w.ctx.Done():
-			w.logger.Info().Msg("Hermes worker heartbeat loop stopping")
-			return
-		}
-	}
-}
 
 // reconnectToBroker attempts to reconnect to the broker with exponential backoff
 func (w *HermesWorker) reconnectToBroker() {
@@ -697,4 +618,232 @@ func (w *HermesWorker) GetService() string {
 // GetIdentity returns the worker identity
 func (w *HermesWorker) GetIdentity() string {
 	return w.identity
+}
+
+// isTemporaryError checks if an error is temporary and expected
+func (w *HermesWorker) isTemporaryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	
+	errStr := err.Error()
+	return errStr == "resource temporarily unavailable" ||
+		   errStr == "no message available" ||
+		   errStr == "operation would block"
+}
+
+// isConnectionError checks if an error indicates a connection problem
+func (w *HermesWorker) isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	
+	errStr := err.Error()
+	return strings.Contains(errStr, "connection") ||
+		   strings.Contains(errStr, "network") ||
+		   strings.Contains(errStr, "broken pipe") ||
+		   strings.Contains(errStr, "socket") ||
+		   strings.Contains(errStr, "peer") ||
+		   strings.Contains(errStr, "closed") ||
+		   strings.Contains(errStr, "reset")
+}
+
+// Channel-based Worker Methods
+
+// socketReader reads messages from socket and feeds them to messagesCh
+func (w *HermesWorker) socketReader() {
+	w.logger.Info().Msg("Starting worker socket reader")
+	defer w.logger.Info().Msg("Worker socket reader stopped")
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-w.shutdownCh:
+			return
+		default:
+			if w.socket == nil {
+				time.Sleep(w.reconnect)
+				continue
+			}
+
+			// Receive message from broker (non-blocking)
+			rawMsg, err := w.socket.Recv()
+			if err != nil {
+				if w.isTemporaryError(err) {
+					w.mutex.RLock()
+					state := w.state
+					w.mutex.RUnlock()
+					
+					if state == WorkerStateDisconnected {
+						continue
+					}
+					
+					time.Sleep(10 * time.Millisecond)
+					continue
+				}
+				
+				// Send error to error handler
+				select {
+				case w.errorsCh <- err:
+				default:
+				}
+				continue
+			}
+			
+			// Send message to processor
+			select {
+			case w.messagesCh <- rawMsg:
+			case <-w.ctx.Done():
+				return
+			case <-w.shutdownCh:
+				return
+			default:
+				w.logger.Warn().Msg("Message channel full, dropping message")
+			}
+		}
+	}
+}
+
+// messageProcessor processes messages from messagesCh
+func (w *HermesWorker) messageProcessor() {
+	w.logger.Info().Msg("Starting worker message processor")
+	defer w.logger.Info().Msg("Worker message processor stopped")
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-w.shutdownCh:
+			return
+		case rawMsg := <-w.messagesCh:
+			if err := w.processMessage(rawMsg); err != nil {
+				select {
+				case w.errorsCh <- err:
+				default:
+				}
+			}
+		}
+	}
+}
+
+// processMessage processes a single message
+func (w *HermesWorker) processMessage(rawMsg zmq4.Msg) error {
+	// Convert message to bytes
+	msg := make([][]byte, len(rawMsg.Frames))
+	for i, frame := range rawMsg.Frames {
+		msg[i] = frame
+	}
+
+	w.logger.Debug().
+		Int("message_parts", len(msg)).
+		Str("service", w.service).
+		Msg("Worker received message from broker")
+
+	if len(msg) < 2 {
+		return fmt.Errorf("received malformed message (insufficient parts): %d", len(msg))
+	}
+
+	empty := msg[0] // Should be empty frame
+
+	if len(empty) != 0 {
+		return fmt.Errorf("received message without empty delimiter")
+	}
+
+	// Reset liveness on any valid message
+	w.liveness = MDP_HEARTBEAT_LIVENESS
+
+	// Parse and handle message
+	return w.handleMessage(msg[1:])
+}
+
+// heartbeatManager manages heartbeat timing using channels
+func (w *HermesWorker) heartbeatManager() {
+	w.logger.Info().Msg("Starting worker heartbeat manager")
+	defer w.logger.Info().Msg("Worker heartbeat manager stopped")
+
+	// Add jitter to prevent synchronization issues (±5 seconds)
+	jitter := time.Duration(rand.Intn(10000)-5000) * time.Millisecond
+	interval := w.heartbeat + jitter
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-w.shutdownCh:
+			return
+		case t := <-ticker.C:
+			w.heartbeatCh <- t
+			w.mutex.RLock()
+			state := w.state
+			w.mutex.RUnlock()
+
+			if state == WorkerStateReady && w.socket != nil {
+				if err := w.sendHeartbeat(); err != nil {
+					select {
+					case w.errorsCh <- fmt.Errorf("heartbeat failed: %w", err):
+					default:
+					}
+					w.liveness--
+					if w.liveness <= 0 {
+						select {
+						case w.reconnectCh <- struct{}{}:
+						default:
+						}
+					}
+				}
+			}
+			
+			// Update ticker with new jitter
+			jitter := time.Duration(rand.Intn(10000)-5000) * time.Millisecond
+			newInterval := w.heartbeat + jitter
+			ticker.Reset(newInterval)
+		}
+	}
+}
+
+// errorHandler handles errors from errorsCh
+func (w *HermesWorker) errorHandler() {
+	w.logger.Info().Msg("Starting worker error handler")
+	defer w.logger.Info().Msg("Worker error handler stopped")
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-w.shutdownCh:
+			return
+		case err := <-w.errorsCh:
+			if w.isConnectionError(err) {
+				w.logger.Warn().Err(err).Msg("Worker connection error - triggering reconnection")
+				select {
+				case w.reconnectCh <- struct{}{}:
+				default:
+				}
+			} else {
+				w.logger.Error().Err(err).Msg("Worker error")
+			}
+		}
+	}
+}
+
+// statsManager manages statistics updates from statsCh
+func (w *HermesWorker) statsManager() {
+	w.logger.Info().Msg("Starting worker stats manager")
+	defer w.logger.Info().Msg("Worker stats manager stopped")
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-w.shutdownCh:
+			return
+		case stats := <-w.statsCh:
+			w.mutex.Lock()
+			w.stats = stats
+			w.mutex.Unlock()
+		}
+	}
 }

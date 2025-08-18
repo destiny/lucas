@@ -46,14 +46,24 @@ topology: |
 components:
   gateway:
     port: 8080
-    services: [web-api, auth, broker-service, database]
+    services: [api-server, auth-middleware, broker-service, database, web-app]
     files: [internal/gateway/*]
     config: gateway_keys.yml
+    internal_architecture:
+      api_server: "HTTP REST endpoints with JWT authentication middleware"
+      broker_service: "ZMQ proxy with persistent client (gateway_main) to hubs"
+      database: "SQLite with user, hub, device management"
+      web_app: "Static file serving on same port as API"
+    service_interactions: "HTTP→APIServer→BrokerService→Hermes Broker→ZMQ Hub, Database←All services"
     
   hub: 
-    services: [daemon, device-manager, worker-service]
+    services: [daemon, device-manager, worker-service, config-api]
     files: [internal/hub/*, cmd/hub.go]
     config: hub.yml
+    worker_architecture:
+      single_worker: "Each hub registers as one 'hub.control' worker, not per-device"
+      worker_identity: "Uses hub_id as ZMQ worker identity"
+      heartbeat_config: "45s intervals with 10x tolerance for internet reliability"
     
   web-ui:
     tech: [svelte@5.38.0, typescript, vite]
@@ -144,17 +154,14 @@ jargon:
     client_id:
       type: "String identifier for ZMQ client connections"
       formats:
-        gateway_persistent: "gateway_main"
-        gateway_legacy: "gateway_<timestamp_nanoseconds>"
-        gateway_immediate: "gateway_immediate"
+        gateway_persistent: "gateway_main (ONLY format used)"
         hub_worker: "<hub_id>"
       examples:
         - "gateway_main"
-        - "gateway_1754756009823031000" 
-        - "gateway_immediate"
         - "hub_ec8ad6e1-1d4c-46b8-b872-9df4e257ffff"
       usage: "ZMQ ROUTER socket routing, response delivery"
-      problem: "Multiple gateway clients cause response routing conflicts"
+      implementation: "Single persistent client eliminates routing conflicts"
+      deprecated_formats: "gateway_<timestamp> and gateway_immediate removed"
     worker_identity:
       type: "String identifier for Hermes workers"
       format: "Same as hub_id"
@@ -187,57 +194,69 @@ jargon:
       example: "Bearer eyJhbGciOiJIUzI1NiIs..."
       usage: "API authentication, user identification"
     hub_keys:
-      public_key: "Base64 encoded public key"
+      public_key: "40-character CurveZMQ public key (validated)"
       private_key: "Base64 encoded private key"
-      product_key: "UUID string"
+      product_key: "UUID string for hub claiming"
       usage: "Hub authentication, secure communication"
+      validation: "Public key length strictly enforced at 40 characters"
+      format_example: "A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0"
 
-  protocol_conflicts:
-    description: "Current issues causing repeated protocol fixes"
-    multiple_gateway_clients:
-      problem: "BrokerService creates new client for each request"
-      formats: ["gateway_immediate", "gateway_<timestamp>"]
-      consequence: "Message ID mismatches, response routing failures"
-      solution: "Use single persistent gateway client"
-    inconsistent_naming:
-      problem: "hub_id vs hubID vs hub.ID confusion"
-      consequence: "Database query failures, API inconsistencies" 
-      solution: "Standardize on snake_case for all identifiers"
+  protocol_improvements:
+    description: "Issues resolved in current implementation"
+    single_gateway_client:
+      implementation: "BrokerService uses single persistent client 'gateway_main'"
+      benefits: "Eliminates message ID mismatches and routing conflicts"
+      status: "RESOLVED - no multiple client issue"
+    consistent_naming:
+      implementation: "Standardized on snake_case throughout codebase"
+      examples: ["hub_id", "device_id", "user_id", "message_id"]
+      status: "RESOLVED - consistent identifier format"
 
 # Health Check System
 health_checks:
   purpose: "Monitor actual connectivity and component health, not just internal state"
-  requirements:
-    gateway_health: "Must test real database and broker connectivity, not just report 'healthy'"
-    hub_health: "Must test actual gateway reachability, not just socket state"
-    connectivity_test: "Perform active probing to detect network failures"
-  hub_health_check:
-    current_problem: "Hub reports healthy when gateway is unreachable"
-    required_fix: "Test actual gateway connectivity, not just worker state"
-    method: "Send periodic test requests to gateway or ping gateway health endpoint"
-    frequency: "Every 60 seconds with failure detection"
+  implementation:
+    gateway_health: "Tests database and broker connectivity via /api/v1/health endpoint"
+    hub_health: "Actual gateway reachability testing implemented"
+    connectivity_verification: "Active probing with heartbeat correlation"
+  hub_health_implementation:
+    method: "testGatewayConnectivity via worker service heartbeat validation"
+    verification: "IsGatewayReachable checks recent heartbeat activity (< 2 minutes)"
+    frequency: "Every 60 seconds via performHealthCheck routine"
+    criteria: "Worker connected AND recent heartbeat received"
+    fallback: "Reports unreachable if no recent heartbeat activity"
+  gateway_health_implementation:
+    broker_validation: "Checks actual worker connections and service states"
+    database_validation: "Verifies SQLite connectivity and operations"
+    heartbeat_monitoring: "Tracks worker liveness with 45s intervals"
   principles:
-    - "Health checks must reflect real operational status"
-    - "Don't rely on internal state flags alone"
-    - "Test end-to-end connectivity, not just socket existence"
-    - "Fail fast when dependencies are unreachable"
+    - "Health checks reflect real operational status (IMPLEMENTED)"
+    - "End-to-end connectivity testing via heartbeat correlation"
+    - "Worker expiry uses grace periods to prevent false negatives"
+    - "Multi-layer validation: socket + heartbeat + recent activity"
 
 # Communication Protocols
 protocols:
   hermes:
-    description: "Simple messaging proxy (NOT service discovery)"
+    description: "Simple messaging proxy with immediate device handshake"
     transport: zmq-router-dealer
-    purpose: "Secure tunnel between gateway and hub, not service mesh"
+    purpose: "Secure tunnel between gateway and hub with auto-discovery"
     roles:
-      broker: "Gateway runs proxy broker internally"
-      client: "Gateway sends device commands through proxy"
-      worker: "Hub receives commands and controls local devices"
-    messages:
-      - READY: hub connects and registers as worker
-      - REQUEST: gateway forwards device commands to hub
-      - REPLY: hub returns command results to gateway
-      - HEARTBEAT: hub liveness check
-      - DISCONNECT: graceful hub shutdown
+      broker: "Gateway runs proxy broker with device list processing"
+      client: "Gateway uses persistent client (gateway_main) for all communication"
+      worker: "Hub registers single worker (hub.control) for all devices"
+    message_flow:
+      - READY: hub registers as hub.control worker → immediate device list request
+      - REQUEST: gateway routes device commands via hub.control service
+      - REPLY: hub returns responses (device list or command results)
+      - HEARTBEAT: bidirectional liveness with 45s intervals
+      - DISCONNECT: graceful shutdown or re-registration trigger
+    implementation_details:
+      worker_registration: "Single hub.control worker per hub (not per device)"
+      device_list_handshake: "Automatic device inventory on worker registration"
+      response_routing: "Device list vs action response detection"
+      heartbeat_tolerance: "10x multiplier (450s) for internet reliability"
+      grace_period: "30s additional tolerance for late heartbeats"
     constants:
       HERMES_CLIENT: "HERMES01"
       HERMES_WORKER: "HERMESW01"
@@ -316,17 +335,19 @@ flows:
   user_device_action: |
     sequenceDiagram
       User->>Web: Click device by name
-      Web->>Gateway: POST /devices/{id}/action + JWT
-      Gateway->>Gateway: Validate JWT → user_id
-      Gateway->>DB: Find device → hub_id
-      Gateway->>Gateway: Prepare action payload
-      Gateway-->>Web: HTTP 200 (immediate response)
-      Gateway->>Gateway: Internal client to Majordomo broker
-      Gateway->>Hub: ZMQ ServiceRequest via Hermes
-      Hub->>Device: Device-specific command
-      Hub->>Hub: Process result (device response optional)
-      Hub->>Gateway: ZMQ ServiceResponse (success/error)
-      Note over Hub,Device: Some devices fire-and-forget, no response
+      Web->>Gateway: POST /user/devices/{id}/action + JWT
+      Gateway->>Gateway: Auth middleware validates JWT → user_id
+      Gateway->>DB: Verify device ownership by user
+      Gateway->>BrokerService: SendDeviceCommand(hub_id, device_id, action)
+      BrokerService->>BrokerService: Generate nonce for deduplication
+      Gateway-->>Web: HTTP 200 (immediate fire-and-forget response)
+      BrokerService->>Hermes: ServiceRequest via persistent client (gateway_main)
+      Hermes->>Hub: Route to hub.control worker (hub_id)
+      Hub->>Hub: Nonce-based deduplication check
+      Hub->>Device: Device-specific command execution
+      Hub->>Hermes: ServiceResponse (success/error/cached)
+      Note over Gateway,Hub: Fire-and-forget mode for responsiveness
+      Note over Hub,Device: Hub handles all device types via single worker
       
   hub_one_time_registration: |
     sequenceDiagram
@@ -366,21 +387,37 @@ files:
 hub_processes:
   one_time_registration:
     purpose: "Establish trust between hub and gateway (security)"
-    trigger: "Hub startup checks gateway_public_key in config"
-    condition: "If missing/placeholder → perform ONE-TIME setup"
-    method: "HTTP only - try common gateway URLs"
-    urls: ["http://localhost:8080", "http://gateway:8080", "http://gateway.local:8080"]
-    payload: {hub_id, public_key, name, product_key}
-    validation: "40-char CurveZMQ public key required"
-    result: "Secure key exchange, save to config file"
-    endpoint: "HTTP POST /hub/register"
+    trigger: "Hub startup checks gateway_public_key in config (daemon.needsRegistration)"
+    condition: "If missing/placeholder 'gateway_public_key_here' → perform auto-registration"
+    method: "Auto-discovery with health check validation"
+    discovery_process:
+      urls: ["http://localhost:8080", "http://127.0.0.1:8080", "http://gateway:8080", "http://gateway.local:8080"]
+      validation_steps:
+        1. "Health check: GET /api/v1/health (status must be 'healthy')"
+        2. "Gateway status: GET /api/v1/gateway/status"
+        3. "Gateway keys: GET /api/v1/gateway/keys/info"
+      zmq_endpoint_derivation: "Replace :8080→:5555, http://→tcp://"
+    payload: {hub_id, public_key, name, product_key, timestamp}
+    validation: "40-char CurveZMQ public key required (enforced)"
+    response_format:
+      success: true
+      gateway_info: {public_key, zmq_endpoint, api_endpoint}
+    result: "Config file updated with gateway info, auto-saved"
+    endpoint: "HTTP POST /api/v1/hub/register"
     
   hub_connection:
     purpose: "Establish secure tunnel to gateway (operation)"
     trigger: "Every hub startup (normal operation)"
     condition: "After registration is complete"
-    method: "ZMQ encrypted connection + device list sync"
-    process: "Connect → READY → Device list → Accept commands"
+    method: "Single ZMQ worker with immediate device list handshake"
+    worker_setup:
+      service_name: "hub.control"
+      worker_identity: "hub_id (same as business ID)"
+      heartbeat_interval: "45 seconds (internet optimized)"
+      reconnect_interval: "10 seconds"
+      liveness_multiplier: "10x (450s tolerance)"
+    process: "Connect → HERMES_READY → Immediate device list request → Accept commands"
+    handshake_detail: "Gateway automatically sends device list request upon worker registration"
     endpoint: "ZMQ tcp://localhost:5555"
     
 # Hub Ownership (User Access Control)

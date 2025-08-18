@@ -19,26 +19,33 @@ import (
 	"time"
 )
 
-// Hermes Protocol Constants
+// Hermes Protocol Constants - Enhanced RFC 7/MDP Compliance
 const (
-	// Protocol versions
-	HERMES_CLIENT = "HERMES01"
-	HERMES_WORKER = "HERMESW01"
+	// Protocol versions (RFC 7/MDP compliant)
+	HERMES_CLIENT = "MDPC01"    // Majordomo Protocol Client v0.1
+	HERMES_WORKER = "MDPW01"    // Majordomo Protocol Worker v0.1
 
-	// Worker commands
-	HERMES_READY      = "READY"
-	HERMES_REQUEST    = "REQUEST"
-	HERMES_REPLY      = "REPLY"
-	HERMES_HEARTBEAT  = "HEARTBEAT"
-	HERMES_DISCONNECT = "DISCONNECT"
+	// Worker commands (RFC 7/MDP standard)
+	HERMES_READY      = "\x01"  // Worker is ready for work
+	HERMES_REQUEST    = "\x02"  // Request from broker to worker
+	HERMES_REPLY      = "\x03"  // Reply from worker to broker
+	HERMES_HEARTBEAT  = "\x04"  // Heartbeat between worker and broker
+	HERMES_DISCONNECT = "\x05"  // Worker disconnecting
 
-	// Client commands
-	HERMES_REQ = "REQ"
-	HERMES_REP = "REP"
+	// Client commands (RFC 7/MDP standard)
+	HERMES_REQ = "\x01"  // Client request
+	HERMES_REP = "\x02"  // Client reply
 
-	// Service lifecycle
+	// Service lifecycle (extended)
 	HERMES_SERVICE_UP   = "SERVICE_UP"
 	HERMES_SERVICE_DOWN = "SERVICE_DOWN"
+	
+	// Protocol frame markers (RFC 7/MDP compliance)
+	MDP_CLIENT_HEADER = "MDPC01"
+	MDP_WORKER_HEADER = "MDPW01"
+	
+	// Standard timing constants (RFC recommendations)
+	MDP_HEARTBEAT_LIVENESS  = 3     // Heartbeats before considering worker dead
 )
 
 // Message represents a Hermes protocol message
@@ -145,4 +152,68 @@ type WorkerRegistry interface {
 	GetWorker(identity string) (*WorkerInfo, bool)
 	GetWorkersForService(service string) []*WorkerInfo
 	UpdateWorkerHeartbeat(identity string) error
+}
+
+// RFC 7/MDP Compliance Helper Functions
+
+// GetMDPHeartbeatInterval returns the recommended heartbeat interval (2.5 seconds)
+func GetMDPHeartbeatInterval() time.Duration {
+	return 2500 * time.Millisecond
+}
+
+// GetMDPHeartbeatExpiry returns the heartbeat expiry duration (7.5 seconds = 3 * 2.5s)
+func GetMDPHeartbeatExpiry() time.Duration {
+	return GetMDPHeartbeatInterval() * MDP_HEARTBEAT_LIVENESS
+}
+
+// IsValidMDPWorkerCommand checks if a command is valid according to RFC 7/MDP
+func IsValidMDPWorkerCommand(command string) bool {
+	switch command {
+	case HERMES_READY, HERMES_REQUEST, HERMES_REPLY, HERMES_HEARTBEAT, HERMES_DISCONNECT:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsValidMDPClientCommand checks if a command is valid according to RFC 7/MDP
+func IsValidMDPClientCommand(command string) bool {
+	switch command {
+	case HERMES_REQ, HERMES_REP:
+		return true
+	default:
+		return false
+	}
+}
+
+// FormatMDPWorkerFrame formats a worker message frame according to RFC 7/MDP
+// Frame format: [empty, protocol, command, service?, body?]
+func FormatMDPWorkerFrame(command, service string, body []byte) [][]byte {
+	frames := [][]byte{
+		[]byte(""),           // Empty frame
+		[]byte(MDP_WORKER_HEADER), // Protocol header
+		[]byte(command),      // Command
+	}
+	
+	if service != "" {
+		frames = append(frames, []byte(service))
+	}
+	
+	if len(body) > 0 {
+		frames = append(frames, body)
+	}
+	
+	return frames
+}
+
+// FormatMDPClientFrame formats a client message frame according to RFC 7/MDP
+// Frame format: [empty, protocol, command, service, body]
+func FormatMDPClientFrame(command, service string, body []byte) [][]byte {
+	return [][]byte{
+		[]byte(""),           // Empty frame
+		[]byte(MDP_CLIENT_HEADER), // Protocol header
+		[]byte(command),      // Command
+		[]byte(service),      // Service name
+		body,                 // Request body
+	}
 }

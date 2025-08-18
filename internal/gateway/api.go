@@ -268,7 +268,7 @@ func (api *APIServer) handleHubRegister(w http.ResponseWriter, r *http.Request) 
 		"hub":             hub,
 		"gateway_info": map[string]interface{}{
 			"public_key":    api.keys.GetServerPublicKey(),
-			"zmq_endpoint":  "tcp://localhost:5555", // Should be configurable
+			"zmq_endpoint":  "tcp://127.0.0.1:5556", // Should be configurable
 			"api_endpoint":  r.Host,
 		},
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
