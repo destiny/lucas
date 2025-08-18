@@ -545,17 +545,38 @@ func (d *Database) GetAllHubs() ([]*Hub, error) {
 
 // EnsureHubExists uses select-insert-select pattern to ensure hub record exists
 // This handles race conditions between hub registration and ZMQ status updates
+// It also handles hub ID format variations (with/without "hub_" prefix)
 func (d *Database) EnsureHubExists(hubID string) error {
-	// 1. SELECT - check if hub exists
-	_, err := d.GetHubByHubID(hubID)
+	// Normalize the input hub_id by trimming whitespace
+	normalizedHubID := strings.TrimSpace(hubID)
+	
+	// 1. SELECT - check if hub exists with exact match first
+	_, err := d.GetHubByHubID(normalizedHubID)
 	if err == nil {
-		return nil // hub already exists
+		return nil // hub already exists with exact match
 	}
 
-	// 2. INSERT - try to create minimal hub record with auto-registration
+	// 2. Check for hub ID format variations to handle prefix mismatches
+	var alternativeHubID string
+	if strings.HasPrefix(normalizedHubID, "hub_") {
+		// Input has prefix, also check without prefix
+		alternativeHubID = strings.TrimPrefix(normalizedHubID, "hub_")
+	} else {
+		// Input has no prefix, also check with prefix
+		alternativeHubID = "hub_" + normalizedHubID
+	}
+	
+	// Check if hub exists with alternative format
+	_, err = d.GetHubByHubID(alternativeHubID)
+	if err == nil {
+		return nil // hub already exists with alternative format
+	}
+
+	// 3. INSERT - try to create minimal hub record with auto-registration
+	// Use the normalized hub ID (input format) for new records
 	query := `INSERT INTO hubs (user_id, hub_id, name, public_key, product_key, endpoint, status, auto_registered, last_seen) 
 			  VALUES (NULL, ?, ?, '', '', '', 'offline', TRUE, CURRENT_TIMESTAMP)`
-	_, err = d.db.Exec(query, hubID, hubID)
+	_, err = d.db.Exec(query, normalizedHubID, normalizedHubID)
 	if err != nil {
 		// Check if this is a duplicate key constraint (race condition)
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "hub_id") {
@@ -565,8 +586,8 @@ func (d *Database) EnsureHubExists(hubID string) error {
 		}
 	}
 
-	// 3. SELECT - verify hub now exists
-	_, err = d.GetHubByHubID(hubID)
+	// 4. SELECT - verify hub now exists
+	_, err = d.GetHubByHubID(normalizedHubID)
 	if err != nil {
 		return fmt.Errorf("hub still not found after auto-registration attempt: %w", err)
 	}
@@ -575,14 +596,36 @@ func (d *Database) EnsureHubExists(hubID string) error {
 }
 
 func (d *Database) UpdateHubStatus(hubID, status string) error {
-	// Ensure hub exists first using select-insert-select pattern
-	if err := d.EnsureHubExists(hubID); err != nil {
-		return fmt.Errorf("could not ensure hub exists: %w", err)
+	// Normalize the input hub_id by trimming whitespace
+	normalizedHubID := strings.TrimSpace(hubID)
+	
+	// Find the actual hub ID that exists in the database (handle format variations)
+	actualHubID := normalizedHubID
+	_, err := d.GetHubByHubID(normalizedHubID)
+	if err != nil {
+		// Try alternative format (with/without "hub_" prefix)
+		var alternativeHubID string
+		if strings.HasPrefix(normalizedHubID, "hub_") {
+			alternativeHubID = strings.TrimPrefix(normalizedHubID, "hub_")
+		} else {
+			alternativeHubID = "hub_" + normalizedHubID
+		}
+		
+		_, err = d.GetHubByHubID(alternativeHubID)
+		if err == nil {
+			actualHubID = alternativeHubID
+		} else {
+			// Neither format exists, try to ensure hub exists with original ID
+			if err := d.EnsureHubExists(normalizedHubID); err != nil {
+				return fmt.Errorf("could not ensure hub exists: %w", err)
+			}
+			actualHubID = normalizedHubID
+		}
 	}
 
-	// Now safely update status
+	// Now safely update status using the correct hub ID
 	query := `UPDATE hubs SET status = ?, last_seen = CURRENT_TIMESTAMP WHERE hub_id = ?`
-	result, err := d.db.Exec(query, status, hubID)
+	result, err := d.db.Exec(query, status, actualHubID)
 	if err != nil {
 		return fmt.Errorf("failed to update hub status: %w", err)
 	}
@@ -594,7 +637,7 @@ func (d *Database) UpdateHubStatus(hubID, status string) error {
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("hub with id %s not found in database", hubID)
+		return fmt.Errorf("hub with id %s (actual: %s) not found in database", hubID, actualHubID)
 	}
 
 	return nil

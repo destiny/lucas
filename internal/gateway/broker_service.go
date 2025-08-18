@@ -452,6 +452,17 @@ func (bs *BrokerService) monitorServices() {
 	}
 }
 
+// extractHubIDFromWorkerIdentity extracts hub UUID from worker identity
+// Converts "hub_9fa87faf-8a62-4d0e-87be-8e37ac9f2cca" -> "9fa87faf-8a62-4d0e-87be-8e37ac9f2cca"
+// Returns the original string if it doesn't match the expected pattern
+func (bs *BrokerService) extractHubIDFromWorkerIdentity(workerID string) string {
+	if strings.HasPrefix(workerID, "hub_") {
+		return strings.TrimPrefix(workerID, "hub_")
+	}
+	// If it doesn't have the hub_ prefix, return as-is (might already be just the UUID)
+	return workerID
+}
+
 // checkServiceHealth checks the health of all services
 func (bs *BrokerService) checkServiceHealth() {
 	services := bs.broker.GetServices()
@@ -466,9 +477,10 @@ func (bs *BrokerService) checkServiceHealth() {
 			if worker, exists := workers[workerID]; exists {
 				if time.Since(worker.LastPing) < 60*time.Second {
 					activeWorkers++
-					// For hub.control service, workerID is the hub ID
+					// For hub.control service, extract hub UUID from worker identity
 					if serviceName == "hub.control" {
-						activeHubIDs = append(activeHubIDs, workerID)
+						hubID := bs.extractHubIDFromWorkerIdentity(workerID)
+						activeHubIDs = append(activeHubIDs, hubID)
 					}
 				}
 			}
@@ -493,13 +505,17 @@ func (bs *BrokerService) checkServiceHealth() {
 
 // processHubWorkerRegistration handles hub worker registration and immediate device list request
 func (bs *BrokerService) processHubWorkerRegistration(hubID, serviceName string) {
+	// Extract hub UUID from hub ID if it has the hub_ prefix
+	actualHubID := bs.extractHubIDFromWorkerIdentity(hubID)
+	
 	bs.logger.Info().
-		Str("hub_id", hubID).
+		Str("input_hub_id", hubID).
+		Str("actual_hub_id", actualHubID).
 		Str("service", serviceName).
 		Msg("Processing hub worker registration")
 
 	// Ensure hub exists in database first
-	if err := bs.database.EnsureHubExists(hubID); err != nil {
+	if err := bs.database.EnsureHubExists(actualHubID); err != nil {
 		bs.logger.Error().
 			Str("hub_id", hubID).
 			Err(err).
@@ -508,16 +524,16 @@ func (bs *BrokerService) processHubWorkerRegistration(hubID, serviceName string)
 	}
 
 	// Update hub status to online
-	if err := bs.database.UpdateHubStatus(hubID, "online"); err != nil {
+	if err := bs.database.UpdateHubStatus(actualHubID, "online"); err != nil {
 		bs.logger.Warn().
-			Str("hub_id", hubID).
+			Str("hub_id", actualHubID).
 			Err(err).
 			Msg("Failed to update hub status to online")
 	}
 
 	// Create hub handler for tracking
 	handler := &HubServiceHandler{
-		hubID:    hubID,
+		hubID:    actualHubID,
 		database: bs.database,
 		registry: bs.registry,
 		logger:   bs.logger,
@@ -555,8 +571,12 @@ func (bs *BrokerService) getClientAddress() string {
 
 // ProcessDeviceListResponse processes the device list response and registers devices
 func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte) {
+	// Extract hub UUID from hub ID if it has the hub_ prefix
+	actualHubID := bs.extractHubIDFromWorkerIdentity(hubID)
+	
 	bs.logger.Info().
-		Str("hub_id", hubID).
+		Str("input_hub_id", hubID).
+		Str("actual_hub_id", actualHubID).
 		Msg("Processing immediate device list response from hub")
 
 	// Ensure hub is registered in gateway database
@@ -566,14 +586,14 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 	var serviceResp hermes.ServiceResponse
 	if err := json.Unmarshal(response, &serviceResp); err != nil {
 		bs.logger.Error().
-			Str("hub_id", hubID).
+			Str("hub_id", actualHubID).
 			Err(err).
 			Msg("Failed to parse device list response")
 		return
 	}
 
 	bs.logger.Info().
-		Str("hub_id", hubID).
+		Str("hub_id", actualHubID).
 		Bool("success", serviceResp.Success).
 		Str("message_id", serviceResp.MessageID).
 		Interface("data", serviceResp.Data).
@@ -581,7 +601,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 
 	if !serviceResp.Success {
 		bs.logger.Error().
-			Str("hub_id", hubID).
+			Str("hub_id", actualHubID).
 			Str("error", serviceResp.Error).
 			Msg("Hub returned error for device list request")
 		return
@@ -594,7 +614,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 		if _, hasData := dataMap["data"]; hasData {
 			if _, hasDevices := dataMap["devices"]; !hasDevices {
 				bs.logger.Debug().
-					Str("hub_id", hubID).
+					Str("hub_id", actualHubID).
 					Str("message_id", serviceResp.MessageID).
 					Interface("response_data", dataMap).
 					Msg("This appears to be a device action response, not a device list - ignoring in device list handler")
@@ -604,10 +624,10 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 	}
 
 	// Get hub record from database
-	hub, err := bs.database.GetHubByHubID(hubID)
+	hub, err := bs.database.GetHubByHubID(actualHubID)
 	if err != nil {
 		bs.logger.Error().
-			Str("hub_id", hubID).
+			Str("hub_id", actualHubID).
 			Err(err).
 			Msg("Failed to get hub record for device registration")
 		return
@@ -617,21 +637,21 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 	dataMap, ok := serviceResp.Data.(map[string]interface{})
 	if !ok {
 		bs.logger.Error().
-			Str("hub_id", hubID).
+			Str("hub_id", actualHubID).
 			Str("data_type", fmt.Sprintf("%T", serviceResp.Data)).
 			Msg("Invalid device list data format")
 		return
 	}
 
 	bs.logger.Debug().
-		Str("hub_id", hubID).
+		Str("hub_id", actualHubID).
 		Interface("data_map", dataMap).
 		Msg("Gateway extracted data map")
 
 	// Check if the data contains error information instead of device list
 	if errorMsg, hasError := dataMap["error"]; hasError {
 		bs.logger.Warn().
-			Str("hub_id", hubID).
+			Str("hub_id", actualHubID).
 			Interface("error", errorMsg).
 			Msg("Hub returned error data instead of device list - this is expected for offline devices")
 		return
@@ -641,7 +661,7 @@ func (bs *BrokerService) ProcessDeviceListResponse(hubID string, response []byte
 	if innerSuccess, hasInnerSuccess := dataMap["success"]; hasInnerSuccess {
 		if success, ok := innerSuccess.(bool); ok && !success {
 			bs.logger.Warn().
-				Str("hub_id", hubID).
+				Str("hub_id", actualHubID).
 				Interface("available_keys", getKeys(dataMap)).
 				Msg("Hub returned unsuccessful response - this is expected for offline devices")
 			return

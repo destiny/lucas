@@ -391,17 +391,30 @@ func (b *Broker) handleWorkerReply(workerID, clientID string, reply []byte) erro
 		}
 
 		if isDeviceListResponse {
+			// Extract the actual hub ID from the response data, not the worker ID
+			actualHubID := workerID // fallback to worker ID
+			if err := json.Unmarshal(reply, &serviceResp); err == nil {
+				if dataMap, ok := serviceResp.Data.(map[string]interface{}); ok {
+					if hubIDVal, hasHubID := dataMap["hub_id"]; hasHubID {
+						if hubIDStr, ok := hubIDVal.(string); ok {
+							actualHubID = hubIDStr
+						}
+					}
+				}
+			}
+
 			b.logger.Info().
-				Str("hub_id", workerID).
+				Str("worker_id", workerID).
+				Str("actual_hub_id", actualHubID).
 				Int("response_size", len(reply)).
 				Msg("Received immediate device list response from hub")
 
-			// Process device list response via broker service
+			// Process device list response via broker service with correct hub ID
 			if b.brokerService != nil {
 				if bs, ok := b.brokerService.(interface {
 					ProcessDeviceListResponse(hubID string, response []byte)
 				}); ok {
-					bs.ProcessDeviceListResponse(workerID, reply)
+					bs.ProcessDeviceListResponse(actualHubID, reply)
 				}
 			}
 			return nil
