@@ -17,6 +17,7 @@ package hub
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
@@ -31,8 +32,9 @@ type Config struct {
 
 // GatewayConfig contains gateway connection settings
 type GatewayConfig struct {
-	Endpoint  string `yaml:"endpoint"`
-	PublicKey string `yaml:"public_key"`
+	Endpoint     string `yaml:"endpoint"`      // ZMQ endpoint (required)
+	HTTPEndpoint string `yaml:"http_endpoint"` // HTTP API endpoint (optional - auto-discovered if not set)
+	PublicKey    string `yaml:"public_key"`
 }
 
 // HubConfig contains hub identity and keys
@@ -234,6 +236,41 @@ func (c *Config) UpdateGatewayInfo(endpoint, publicKey string) {
 	if publicKey != "" {
 		c.Gateway.PublicKey = publicKey
 	}
+}
+
+// GetHTTPEndpoint returns the HTTP endpoint, deriving it from ZMQ endpoint if not explicitly set
+func (c *Config) GetHTTPEndpoint() string {
+	if c.Gateway.HTTPEndpoint != "" {
+		return c.Gateway.HTTPEndpoint
+	}
+	
+	// Derive HTTP endpoint from ZMQ endpoint
+	return deriveHTTPFromZMQ(c.Gateway.Endpoint)
+}
+
+// deriveHTTPFromZMQ converts a ZMQ endpoint to HTTP endpoint
+// Example: "tcp://localhost:5555" -> "http://localhost:8080"
+func deriveHTTPFromZMQ(zmqEndpoint string) string {
+	if zmqEndpoint == "" {
+		return "http://localhost:8080"
+	}
+	
+	// Replace tcp:// with http://
+	httpEndpoint := strings.Replace(zmqEndpoint, "tcp://", "http://", 1)
+	
+	// Convert common ZMQ ports to HTTP ports
+	httpEndpoint = strings.Replace(httpEndpoint, ":5555", ":8080", 1)
+	
+	// Handle wildcard addresses
+	httpEndpoint = strings.Replace(httpEndpoint, "*:", "localhost:", 1)
+	httpEndpoint = strings.Replace(httpEndpoint, "0.0.0.0:", "localhost:", 1)
+	
+	return httpEndpoint
+}
+
+// SetHTTPEndpoint sets the HTTP endpoint and saves it to config
+func (c *Config) SetHTTPEndpoint(httpEndpoint string) {
+	c.Gateway.HTTPEndpoint = httpEndpoint
 }
 
 // NewDefaultConfig creates a default configuration template

@@ -15,9 +15,11 @@
 package hub
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -202,4 +204,115 @@ func (gd *GatewayDiscovery) GetGatewayInfo(gatewayURL string) (*GatewayInfo, err
 func (gd *GatewayDiscovery) TestGatewayConnection(gatewayURL string) error {
 	_, err := gd.CheckGateway(gatewayURL)
 	return err
+}
+
+// DiscoverHTTPFromConfig attempts to discover the HTTP endpoint using config's smart conversion
+func (gd *GatewayDiscovery) DiscoverHTTPFromConfig(config *Config) (*GatewayInfo, error) {
+	// First try the configured HTTP endpoint or derive from ZMQ
+	httpEndpoint := config.GetHTTPEndpoint()
+	
+	info, err := gd.CheckGateway(httpEndpoint)
+	if err == nil {
+		// Success! Save the discovered endpoint to config
+		if config.Gateway.HTTPEndpoint == "" {
+			config.SetHTTPEndpoint(httpEndpoint)
+		}
+		return info, nil
+	}
+	
+	// If derived endpoint failed, try common alternatives
+	candidateEndpoints := gd.generateCandidateEndpoints(config.Gateway.Endpoint)
+	
+	for _, endpoint := range candidateEndpoints {
+		info, err := gd.CheckGateway(endpoint)
+		if err == nil {
+			// Success! Save the discovered endpoint to config
+			config.SetHTTPEndpoint(endpoint)
+			return info, nil
+		}
+	}
+	
+	// All automatic attempts failed, prompt user interactively
+	return gd.promptForHTTPEndpoint(config)
+}
+
+// generateCandidateEndpoints generates alternative HTTP endpoints to try
+func (gd *GatewayDiscovery) generateCandidateEndpoints(zmqEndpoint string) []string {
+	candidates := []string{}
+	
+	if zmqEndpoint == "" {
+		return []string{"http://localhost:8080", "http://127.0.0.1:8080"}
+	}
+	
+	// Extract host from ZMQ endpoint
+	host := extractHostFromEndpoint(zmqEndpoint)
+	
+	// Try different HTTP ports
+	httpPorts := []string{"8080", "80", "8000", "3000"}
+	for _, port := range httpPorts {
+		candidates = append(candidates, fmt.Sprintf("http://%s:%s", host, port))
+	}
+	
+	return candidates
+}
+
+// extractHostFromEndpoint extracts the host part from a ZMQ endpoint
+func extractHostFromEndpoint(endpoint string) string {
+	// Remove protocol
+	host := strings.TrimPrefix(endpoint, "tcp://")
+	
+	// Handle wildcard addresses
+	if strings.HasPrefix(host, "*:") || strings.HasPrefix(host, "0.0.0.0:") {
+		return "localhost"
+	}
+	
+	// Extract host part (before port)
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		return host[:idx]
+	}
+	
+	return host
+}
+
+// promptForHTTPEndpoint interactively prompts user for the correct HTTP endpoint
+func (gd *GatewayDiscovery) promptForHTTPEndpoint(config *Config) (*GatewayInfo, error) {
+	reader := bufio.NewReader(os.Stdin)
+	
+	fmt.Printf("\n🔍 Gateway HTTP endpoint discovery failed!\n")
+	fmt.Printf("ZMQ endpoint: %s\n", config.Gateway.Endpoint)
+	fmt.Printf("Tried: %s\n\n", config.GetHTTPEndpoint())
+	
+	for {
+		fmt.Printf("Please enter the correct HTTP endpoint for the gateway API\n")
+		fmt.Printf("(e.g., http://192.168.1.100:8080 or http://gateway.local:8080): ")
+		
+		userInput, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, fmt.Errorf("failed to read user input: %w", err)
+		}
+		
+		httpEndpoint := strings.TrimSpace(userInput)
+		if httpEndpoint == "" {
+			fmt.Printf("❌ Empty input. Please try again.\n\n")
+			continue
+		}
+		
+		// Ensure proper HTTP prefix
+		if !strings.HasPrefix(httpEndpoint, "http://") && !strings.HasPrefix(httpEndpoint, "https://") {
+			httpEndpoint = "http://" + httpEndpoint
+		}
+		
+		fmt.Printf("🔗 Testing connection to: %s\n", httpEndpoint)
+		
+		info, err := gd.CheckGateway(httpEndpoint)
+		if err == nil {
+			fmt.Printf("✅ Connection successful!\n")
+			// Save the working endpoint to config
+			config.SetHTTPEndpoint(httpEndpoint)
+			return info, nil
+		}
+		
+		fmt.Printf("❌ Connection failed: %v\n", err)
+		fmt.Printf("Please check the URL and try again.\n\n")
+	}
 }

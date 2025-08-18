@@ -228,6 +228,23 @@ func CreateDefaultGatewayKeys() (*GatewayKeys, error) {
 	}, nil
 }
 
+// NewKeysFromStrings creates GatewayKeys from public and private key strings
+func NewKeysFromStrings(publicKey, privateKey string) (*GatewayKeys, error) {
+	keys := &GatewayKeys{
+		Server: KeyPair{
+			PublicKey:  publicKey,
+			PrivateKey: privateKey,
+		},
+	}
+	
+	// Validate the keys
+	if err := keys.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid key strings: %w", err)
+	}
+	
+	return keys, nil
+}
+
 // KeyInfo provides information about a key without revealing the private key
 type KeyInfo struct {
 	PublicKey string `json:"public_key"`

@@ -57,10 +57,16 @@ The gateway provides a central point for managing distributed IoT devices across
 		setupLogging(config)
 
 		log := logger.New()
+		// Determine keys source for logging
+		keysSource := "embedded"
+		if !config.HasEmbeddedKeys() {
+			keysSource = config.Keys.File
+		}
+
 		log.Info().
 			Str("config_file", gatewayConfigPath).
 			Str("db_path", config.Database.Path).
-			Str("keys_path", config.Keys.File).
+			Str("keys_source", keysSource).
 			Str("zmq_address", config.Server.ZMQ.Address).
 			Str("api_address", config.Server.API.Address).
 			Str("log_level", config.Logging.Level).
@@ -74,16 +80,46 @@ The gateway provides a central point for managing distributed IoT devices across
 		}
 		defer database.Close()
 
-		// Load or generate keys
-		keys, err := gateway.LoadOrGenerateGatewayKeys(config.Keys.File)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to load gateway keys")
-			return fmt.Errorf("failed to load gateway keys: %w", err)
+		// Load keys (embedded or from file)
+		var keys *gateway.GatewayKeys
+		
+		if config.HasEmbeddedKeys() {
+			// Use embedded keys
+			serverKeys, keyErr := config.GetServerKeys()
+			if keyErr != nil {
+				log.Error().Err(keyErr).Msg("Failed to get embedded server keys")
+				return fmt.Errorf("failed to get embedded server keys: %w", keyErr)
+			}
+			if serverKeys == nil {
+				log.Error().Msg("Config has embedded keys flag but server keys are nil")
+				return fmt.Errorf("embedded server keys not found in config")
+			}
+			
+			keys, keyErr = gateway.NewKeysFromStrings(serverKeys.PublicKey, serverKeys.PrivateKey)
+			if keyErr != nil {
+				log.Error().Err(keyErr).Msg("Failed to create keys from embedded config")
+				return fmt.Errorf("failed to create keys from embedded config: %w", keyErr)
+			}
+			
+			log.Info().
+				Str("public_key", keys.GetServerPublicKey()).
+				Str("source", "embedded_config").
+				Msg("Gateway keys loaded from embedded config")
+		} else {
+			// Fall back to file-based keys for backward compatibility
+			var keyErr error
+			keys, keyErr = gateway.LoadOrGenerateGatewayKeys(config.Keys.File)
+			if keyErr != nil {
+				log.Error().Err(keyErr).Msg("Failed to load gateway keys from file")
+				return fmt.Errorf("failed to load gateway keys from file: %w", keyErr)
+			}
+			
+			log.Info().
+				Str("public_key", keys.GetServerPublicKey()).
+				Str("source", "key_file").
+				Str("file", config.Keys.File).
+				Msg("Gateway keys loaded from file")
 		}
-
-		log.Info().
-			Str("public_key", keys.GetServerPublicKey()).
-			Msg("Gateway keys loaded")
 
 		// Initialize Hermes Broker Service
 		brokerService := gateway.NewBrokerService(config.Server.ZMQ.Address, keys, database)
@@ -268,25 +304,43 @@ var gatewayInitCmd = &cobra.Command{
 		if gatewayDBPath != "" {
 			config.Database.Path = gatewayDBPath
 		}
-		if gatewayKeysPath != "" {
-			config.Keys.File = gatewayKeysPath
-		}
+		// Note: We no longer set config.Keys.File since we use embedded keys
 
-		// Generate keys if they don't exist
-		if _, err := os.Stat(config.Keys.File); os.IsNotExist(err) {
-			cmd.Printf("Generating gateway keys: %s\n", config.Keys.File)
-			keys, err := gateway.CreateDefaultGatewayKeys()
+		// Generate embedded keys if they don't exist or are placeholders
+		if !config.HasEmbeddedKeys() {
+			cmd.Printf("Generating embedded gateway keys...\n")
+			
+			// Generate server keys
+			serverKeys, err := gateway.CreateDefaultGatewayKeys()
 			if err != nil {
-				return fmt.Errorf("failed to generate keys: %w", err)
+				return fmt.Errorf("failed to generate server keys: %w", err)
 			}
-
-			if err := gateway.SaveGatewayKeys(keys, config.Keys.File); err != nil {
-				return fmt.Errorf("failed to save keys: %w", err)
+			
+			// Generate internal keys  
+			internalKeys, err := gateway.CreateDefaultGatewayKeys()
+			if err != nil {
+				return fmt.Errorf("failed to generate internal keys: %w", err)
 			}
-
-			cmd.Printf("✓ Keys generated: %s\n", keys.GetServerPublicKey())
+			
+			// Embed keys in config
+			config.Keys.Server = &gateway.ServerKeys{
+				PublicKey:  serverKeys.GetServerPublicKey(),
+				PrivateKey: serverKeys.GetServerPrivateKey(),
+			}
+			config.Keys.Internal = &gateway.InternalKeys{
+				PublicKey:  internalKeys.GetServerPublicKey(),
+				PrivateKey: internalKeys.GetServerPrivateKey(),
+			}
+			
+			// Save updated config with embedded keys
+			if err := gateway.SaveGatewayConfig(config, configPath); err != nil {
+				return fmt.Errorf("failed to save config with embedded keys: %w", err)
+			}
+			
+			cmd.Printf("✓ Embedded keys generated and saved to config\n")
+			cmd.Printf("✓ Server public key: %s\n", config.Keys.Server.PublicKey)
 		} else {
-			cmd.Printf("✓ Keys already exist: %s\n", config.Keys.File)
+			cmd.Printf("✓ Embedded keys already exist in config\n")
 		}
 
 		// Initialize database
@@ -321,6 +375,12 @@ var gatewayInitCmd = &cobra.Command{
 func loadGatewayConfiguration() (*gateway.GatewayConfig, error) {
 	var config *gateway.GatewayConfig
 	var err error
+	var configPath string = gatewayConfigPath
+
+	// Use default config path if not specified
+	if configPath == "" {
+		configPath = "gateway.yml"
+	}
 
 	// Try to load configuration file
 	if gatewayConfigPath != "" {
@@ -343,7 +403,8 @@ func loadGatewayConfiguration() (*gateway.GatewayConfig, error) {
 	if gatewayDBPath != "" {
 		config.Database.Path = gatewayDBPath
 	}
-	if gatewayKeysPath != "" {
+	// Only set Keys.File if embedded keys are not available (backward compatibility)
+	if gatewayKeysPath != "" && !config.HasEmbeddedKeys() {
 		config.Keys.File = gatewayKeysPath
 	}
 	if gatewayZMQAddr != "" {
@@ -354,6 +415,42 @@ func loadGatewayConfiguration() (*gateway.GatewayConfig, error) {
 	}
 	if gatewayDebugFlag {
 		config.Logging.Level = "debug"
+	}
+
+	// Auto-generate embedded keys if config has placeholder keys or no config file existed
+	if !config.HasEmbeddedKeys() {
+		// Generate embedded keys automatically
+		fmt.Printf("Auto-generating embedded gateway keys...\n")
+		
+		// Generate server keys
+		serverKeys, keyErr := gateway.CreateDefaultGatewayKeys()
+		if keyErr != nil {
+			return nil, fmt.Errorf("failed to generate server keys: %w", keyErr)
+		}
+		
+		// Generate internal keys  
+		internalKeys, keyErr := gateway.CreateDefaultGatewayKeys()
+		if keyErr != nil {
+			return nil, fmt.Errorf("failed to generate internal keys: %w", keyErr)
+		}
+		
+		// Embed keys in config
+		config.Keys.Server = &gateway.ServerKeys{
+			PublicKey:  serverKeys.GetServerPublicKey(),
+			PrivateKey: serverKeys.GetServerPrivateKey(),
+		}
+		config.Keys.Internal = &gateway.InternalKeys{
+			PublicKey:  internalKeys.GetServerPublicKey(),
+			PrivateKey: internalKeys.GetServerPrivateKey(),
+		}
+		
+		// Save updated config with embedded keys
+		if err := gateway.SaveGatewayConfig(config, configPath); err != nil {
+			return nil, fmt.Errorf("failed to save auto-generated config: %w", err)
+		}
+		
+		fmt.Printf("✓ Configuration auto-created: %s\n", configPath)
+		fmt.Printf("✓ Embedded keys generated and saved\n")
 	}
 
 	return config, nil

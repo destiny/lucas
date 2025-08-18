@@ -66,9 +66,26 @@ type DatabaseConfig struct {
 
 // KeysConfig contains cryptographic key settings
 type KeysConfig struct {
-	File         string `yaml:"file"`
+	// Embedded keys (preferred)
+	Server   *ServerKeys   `yaml:"server,omitempty"`
+	Internal *InternalKeys `yaml:"internal,omitempty"`
+	
+	// Legacy file-based keys (for backward compatibility)
+	File         string `yaml:"file,omitempty"`
 	AutoGenerate bool   `yaml:"auto_generate"`
 	Format       string `yaml:"format"` // "yaml" or "json" for backward compatibility
+}
+
+// ServerKeys contains the gateway's server keypair for external communication
+type ServerKeys struct {
+	PublicKey  string `yaml:"public_key"`
+	PrivateKey string `yaml:"private_key"`
+}
+
+// InternalKeys contains the gateway's internal keypair for broker communication
+type InternalKeys struct {
+	PublicKey  string `yaml:"public_key"`
+	PrivateKey string `yaml:"private_key"`
 }
 
 // LoggingConfig contains logging settings
@@ -160,7 +177,14 @@ func NewDefaultGatewayConfig() *GatewayConfig {
 			Timeout:        "5s",
 		},
 		Keys: KeysConfig{
-			File:         "gateway_keys.yml",
+			Server: &ServerKeys{
+				PublicKey:  "gateway_server_public_key_here",
+				PrivateKey: "gateway_server_private_key_here",
+			},
+			Internal: &InternalKeys{
+				PublicKey:  "gateway_internal_public_key_here",
+				PrivateKey: "gateway_internal_private_key_here",
+			},
 			AutoGenerate: true,
 			Format:       "yaml",
 		},
@@ -209,6 +233,21 @@ func (c *GatewayConfig) setDefaults() error {
 		c.Database.Timeout = "5s"
 	}
 
+	// Initialize embedded keys if not present
+	if c.Keys.Server == nil {
+		c.Keys.Server = &ServerKeys{
+			PublicKey:  "gateway_server_public_key_here",
+			PrivateKey: "gateway_server_private_key_here",
+		}
+	}
+	if c.Keys.Internal == nil {
+		c.Keys.Internal = &InternalKeys{
+			PublicKey:  "gateway_internal_public_key_here",
+			PrivateKey: "gateway_internal_private_key_here",
+		}
+	}
+	
+	// Legacy file-based keys defaults (for backward compatibility)
 	if c.Keys.File == "" {
 		c.Keys.File = "gateway_keys.yml"
 	}
@@ -306,6 +345,45 @@ func (c *GatewayConfig) validate() error {
 	}
 
 	return nil
+}
+
+// HasEmbeddedKeys returns true if the configuration has embedded keys (not placeholders)
+func (c *GatewayConfig) HasEmbeddedKeys() bool {
+	return c.Keys.Server != nil && c.Keys.Internal != nil &&
+		c.Keys.Server.PublicKey != "" && c.Keys.Server.PublicKey != "gateway_server_public_key_here" &&
+		c.Keys.Server.PrivateKey != "" && c.Keys.Server.PrivateKey != "gateway_server_private_key_here" &&
+		c.Keys.Internal.PublicKey != "" && c.Keys.Internal.PublicKey != "gateway_internal_public_key_here" &&
+		c.Keys.Internal.PrivateKey != "" && c.Keys.Internal.PrivateKey != "gateway_internal_private_key_here"
+}
+
+// GetServerKeys returns the server keys (either embedded or from file)
+func (c *GatewayConfig) GetServerKeys() (*ServerKeys, error) {
+	if c.HasEmbeddedKeys() {
+		return c.Keys.Server, nil
+	}
+	
+	// Fall back to file-based keys (load from separate file)
+	if c.Keys.File != "" {
+		// This would need to be implemented to load from gateway_keys.yml
+		return nil, fmt.Errorf("file-based keys not yet implemented, please use embedded keys")
+	}
+	
+	return nil, fmt.Errorf("no server keys available")
+}
+
+// GetInternalKeys returns the internal keys (either embedded or from file)
+func (c *GatewayConfig) GetInternalKeys() (*InternalKeys, error) {
+	if c.HasEmbeddedKeys() {
+		return c.Keys.Internal, nil
+	}
+	
+	// Fall back to file-based keys (load from separate file)
+	if c.Keys.File != "" {
+		// This would need to be implemented to load from gateway_keys.yml
+		return nil, fmt.Errorf("file-based keys not yet implemented, please use embedded keys")
+	}
+	
+	return nil, fmt.Errorf("no internal keys available")
 }
 
 // GetAPITimeout returns the API timeout as a time.Duration
