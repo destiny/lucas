@@ -7,7 +7,7 @@ toolchain go1.24.5
 require (
 	github.com/charmbracelet/bubbletea v1.3.6
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/destiny/zmq4/v25 v25.3.3
+	github.com/destiny/zmq4/v25 v25.3.8
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1

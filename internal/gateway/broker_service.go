@@ -140,8 +140,8 @@ func (bs *BrokerService) Start() error {
 		return fmt.Errorf("failed to start Hermes broker: %w", err)
 	}
 
-	// Add a small delay to ensure broker is fully ready
-	time.Sleep(100 * time.Millisecond)
+	// Add a longer delay to ensure broker is fully ready with channel workers
+	time.Sleep(500 * time.Millisecond)
 
 	// Start persistent client AFTER broker is listening
 	bs.clientMutex.Lock()

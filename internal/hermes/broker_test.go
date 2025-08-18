@@ -17,7 +17,6 @@ package hermes
 import (
 	"fmt"
 	"testing"
-	"time"
 )
 
 // MockRequestHandler implements RequestHandler for testing
@@ -81,8 +80,8 @@ func TestBrokerBasicOperations(t *testing.T) {
 		if broker.workers == nil {
 			t.Error("Expected non-nil workers map")
 		}
-		if broker.heartbeat != 45*time.Second {
-			t.Errorf("Expected default heartbeat 45s, got %v", broker.heartbeat)
+		if broker.heartbeat != GetMDPHeartbeatExpiry() {
+			t.Errorf("Expected default heartbeat %v (RFC 7/MDP), got %v", GetMDPHeartbeatExpiry(), broker.heartbeat)
 		}
 	})
 

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,7 +52,7 @@ type ClientStats struct {
 	AverageLatency   float64   `json:"average_latency_ms"`
 }
 
-// HermesClient implements the Hermes Majordomo Protocol client
+// HermesClient implements the Hermes Majordomo Protocol client with channel-based architecture
 type HermesClient struct {
 	broker       string
 	identity     string
@@ -66,9 +67,18 @@ type HermesClient struct {
 	stats        *ClientStats
 	mutex        sync.RWMutex
 	latencies    []time.Duration
+	
+	// Channel-based architecture
+	messagesCh      chan zmq4.Msg                    // Incoming messages from broker
+	requestCh       chan *PendingClientRequest       // Outgoing requests
+	responseCh      chan *PendingClientRequest       // Processed responses
+	timeoutCh       chan string                      // Timeout notifications (message ID)
+	shutdownCh      chan struct{}                    // Shutdown signal
+	errorsCh        chan error                       // Error notifications
+	reconnectCh     chan struct{}                    // Reconnection requests
 }
 
-// NewClient creates a new Hermes client
+// NewClient creates a new Hermes client with channel-based architecture
 func NewClient(broker, identity string) *HermesClient {
 	ctx, cancel := context.WithCancel(context.Background())
 	
@@ -86,6 +96,15 @@ func NewClient(broker, identity string) *HermesClient {
 			StartTime: time.Now(),
 		},
 		latencies: make([]time.Duration, 0, 100), // Keep last 100 latencies
+		
+		// Initialize channels
+		messagesCh:  make(chan zmq4.Msg, 100),             // Buffered for high throughput
+		requestCh:   make(chan *PendingClientRequest, 50), // Buffered request queue
+		responseCh:  make(chan *PendingClientRequest, 50), // Buffered response queue
+		timeoutCh:   make(chan string, 100),               // Buffered timeout notifications
+		shutdownCh:  make(chan struct{}, 1),               // Single shutdown signal
+		errorsCh:    make(chan error, 50),                 // Buffered error notifications
+		reconnectCh: make(chan struct{}, 1),               // Single reconnection signal
 	}
 }
 
@@ -103,29 +122,38 @@ func (c *HermesClient) SetRetries(retries int) {
 	c.retries = retries
 }
 
-// Start starts the client
+// Start starts the client with channel-based architecture
 func (c *HermesClient) Start() error {
 	c.logger.Info().
 		Str("broker", c.broker).
 		Str("identity", c.identity).
-		Msg("Starting Hermes client")
+		Msg("Starting Hermes client with channel-based architecture")
 
 	if err := c.connect(); err != nil {
 		return fmt.Errorf("failed to connect to broker: %w", err)
 	}
 
-	// Start message processing loop
-	go c.messageLoop()
-
-	// Start timeout monitor
-	go c.timeoutMonitor()
+	// Start channel-based workers
+	go c.socketReader()       // Read from socket and feed messagesCh
+	go c.messageProcessor()   // Process messages from messagesCh
+	go c.requestHandler()     // Handle outgoing requests from requestCh
+	go c.responseHandler()    // Handle processed responses from responseCh
+	go c.timeoutManager()     // Manage timeouts using timeoutCh
+	go c.errorHandler()       // Handle errors from errorsCh
+	go c.reconnectManager()   // Handle reconnection requests
 
 	return nil
 }
 
-// Stop stops the client
+// Stop stops the client and closes all channels
 func (c *HermesClient) Stop() error {
 	c.logger.Info().Msg("Stopping Hermes client")
+
+	// Signal shutdown to all channel workers
+	select {
+	case c.shutdownCh <- struct{}{}:
+	default:
+	}
 
 	c.cancel()
 
@@ -136,8 +164,12 @@ func (c *HermesClient) Stop() error {
 		case pending.Error <- fmt.Errorf("client shutting down"):
 		default:
 		}
-		close(pending.Response)
-		close(pending.Error)
+		if pending.Response != nil {
+			close(pending.Response)
+		}
+		if pending.Error != nil {
+			close(pending.Error)
+		}
 	}
 	c.pending = make(map[string]*PendingClientRequest)
 	c.mutex.Unlock()
@@ -497,72 +529,6 @@ func (c *HermesClient) sendRequest(service, messageID string, body []byte) error
 	return nil
 }
 
-// messageLoop processes incoming messages
-func (c *HermesClient) messageLoop() {
-	c.logger.Info().Msg("Starting Hermes client message loop")
-
-	for {
-		select {
-		case <-c.ctx.Done():
-			c.logger.Info().Msg("Hermes client message loop stopping")
-			return
-		default:
-			if c.socket == nil {
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-
-			// Receive message from broker (non-blocking)
-			rawMsg, err := c.socket.Recv()
-			if err != nil {
-				if err.Error() == "resource temporarily unavailable" {
-					// No message available - sleep briefly to prevent busy waiting
-					time.Sleep(10 * time.Millisecond)
-					continue
-				} else {
-					c.logger.Error().Err(err).Msg("Failed to receive message from broker")
-				}
-				continue
-			}
-			
-			// Convert message to bytes
-			msg := make([][]byte, len(rawMsg.Frames))
-			for i, frame := range rawMsg.Frames {
-				msg[i] = frame
-			}
-
-			c.logger.Debug().
-				Int("message_parts", len(msg)).
-				Msg("Client received message from broker")
-
-			if len(msg) < 2 {
-				c.logger.Warn().
-					Int("parts_count", len(msg)).
-					Msg("Received malformed message (insufficient parts)")
-				continue
-			}
-
-			empty := msg[0] // Should be empty frame
-			response := msg[1] // Response body
-
-			if len(empty) != 0 {
-				c.logger.Warn().Msg("Received message without empty delimiter")
-				continue
-			}
-
-			c.logger.Debug().
-				Int("response_size", len(response)).
-				Msg("Received response from broker")
-
-			// Handle response
-			if err := c.handleResponse(response); err != nil {
-				c.logger.Error().
-					Err(err).
-					Msg("Failed to handle response from broker")
-			}
-		}
-	}
-}
 
 // handleResponse handles a response from the broker
 func (c *HermesClient) handleResponse(responseBytes []byte) error {
@@ -671,23 +637,6 @@ func (c *HermesClient) handleServiceResponse(resp *ServiceResponse) error {
 	return nil
 }
 
-// timeoutMonitor monitors and cleans up timed out requests
-func (c *HermesClient) timeoutMonitor() {
-	ticker := time.NewTicker(5 * time.Second) // Check every 5 seconds
-	defer ticker.Stop()
-
-	c.logger.Debug().Msg("Starting Hermes client timeout monitor")
-
-	for {
-		select {
-		case <-ticker.C:
-			c.cleanupTimeoutRequests()
-		case <-c.ctx.Done():
-			c.logger.Debug().Msg("Hermes client timeout monitor stopping")
-			return
-		}
-	}
-}
 
 // cleanupTimeoutRequests removes requests that have exceeded their timeout
 func (c *HermesClient) cleanupTimeoutRequests() {
@@ -765,4 +714,281 @@ func (c *HermesClient) GetPendingCount() int {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 	return len(c.pending)
+}
+
+// isTemporaryError checks if an error is temporary and expected
+func (c *HermesClient) isTemporaryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	
+	errStr := err.Error()
+	return errStr == "resource temporarily unavailable" ||
+		   errStr == "no message available" ||
+		   errStr == "operation would block"
+}
+
+// isConnectionError checks if an error indicates a connection problem
+func (c *HermesClient) isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	
+	errStr := err.Error()
+	return strings.Contains(errStr, "connection") ||
+		   strings.Contains(errStr, "network") ||
+		   strings.Contains(errStr, "broken pipe") ||
+		   strings.Contains(errStr, "socket") ||
+		   strings.Contains(errStr, "peer") ||
+		   strings.Contains(errStr, "closed") ||
+		   strings.Contains(errStr, "reset")
+}
+
+// attemptReconnection attempts to reconnect the client to the broker
+func (c *HermesClient) attemptReconnection() {
+	c.logger.Info().Msg("Attempting client reconnection to broker")
+	
+	// Close existing socket
+	if c.socket != nil {
+		c.socket.Close()
+		c.socket = nil
+	}
+	
+	// Try to reconnect
+	if err := c.connect(); err != nil {
+		c.logger.Error().Err(err).Msg("Failed to reconnect client to broker")
+		// Sleep before trying again to avoid busy reconnection loop
+		time.Sleep(5 * time.Second)
+	} else {
+		c.logger.Info().Msg("Client successfully reconnected to broker")
+	}
+}
+
+// Channel-based Client Methods
+
+// socketReader reads messages from socket and feeds them to messagesCh
+func (c *HermesClient) socketReader() {
+	c.logger.Info().Msg("Starting client socket reader")
+	defer c.logger.Info().Msg("Client socket reader stopped")
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-c.shutdownCh:
+			return
+		default:
+			if c.socket == nil {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+
+			// Receive message from broker (non-blocking)
+			rawMsg, err := c.socket.Recv()
+			if err != nil {
+				if c.isTemporaryError(err) {
+					time.Sleep(10 * time.Millisecond)
+					continue
+				} 
+				
+				// Send error to error handler
+				select {
+				case c.errorsCh <- err:
+				default:
+				}
+				continue
+			}
+			
+			// Send message to processor
+			select {
+			case c.messagesCh <- rawMsg:
+			case <-c.ctx.Done():
+				return
+			case <-c.shutdownCh:
+				return
+			default:
+				c.logger.Warn().Msg("Message channel full, dropping message")
+			}
+		}
+	}
+}
+
+// messageProcessor processes messages from messagesCh
+func (c *HermesClient) messageProcessor() {
+	c.logger.Info().Msg("Starting client message processor")
+	defer c.logger.Info().Msg("Client message processor stopped")
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-c.shutdownCh:
+			return
+		case rawMsg := <-c.messagesCh:
+			if err := c.processMessage(rawMsg); err != nil {
+				select {
+				case c.errorsCh <- err:
+				default:
+				}
+			}
+		}
+	}
+}
+
+// processMessage processes a single message
+func (c *HermesClient) processMessage(rawMsg zmq4.Msg) error {
+	// Convert message to bytes
+	msg := make([][]byte, len(rawMsg.Frames))
+	for i, frame := range rawMsg.Frames {
+		msg[i] = frame
+	}
+
+	c.logger.Debug().
+		Int("message_parts", len(msg)).
+		Msg("Client received message from broker")
+
+	if len(msg) < 2 {
+		return fmt.Errorf("received malformed message (insufficient parts): %d", len(msg))
+	}
+
+	empty := msg[0] // Should be empty frame
+	response := msg[1] // Response body
+
+	if len(empty) != 0 {
+		return fmt.Errorf("received message without empty delimiter")
+	}
+
+	// Handle response
+	return c.handleResponse(response)
+}
+
+// requestHandler handles outgoing requests from requestCh
+func (c *HermesClient) requestHandler() {
+	c.logger.Info().Msg("Starting client request handler")
+	defer c.logger.Info().Msg("Client request handler stopped")
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-c.shutdownCh:
+			return
+		case req := <-c.requestCh:
+			if err := c.sendRequest(req.Service, req.MessageID, req.Body); err != nil {
+				select {
+				case req.Error <- err:
+				default:
+				}
+			}
+		}
+	}
+}
+
+// responseHandler handles processed responses from responseCh
+func (c *HermesClient) responseHandler() {
+	c.logger.Info().Msg("Starting client response handler")
+	defer c.logger.Info().Msg("Client response handler stopped")
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-c.shutdownCh:
+			return
+		case resp := <-c.responseCh:
+			// Calculate and store latency
+			latency := time.Since(resp.Timestamp)
+			c.recordLatency(latency)
+			
+			c.mutex.Lock()
+			c.stats.ResponsesReceived++
+			c.stats.LastResponse = time.Now()
+			c.mutex.Unlock()
+		}
+	}
+}
+
+// timeoutManager manages timeouts using timeoutCh
+func (c *HermesClient) timeoutManager() {
+	c.logger.Info().Msg("Starting client timeout manager")
+	defer c.logger.Info().Msg("Client timeout manager stopped")
+
+	ticker := time.NewTicker(5 * time.Second) // Check every 5 seconds
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-c.shutdownCh:
+			return
+		case <-ticker.C:
+			c.cleanupTimeoutRequests()
+		case messageID := <-c.timeoutCh:
+			c.handleTimeout(messageID)
+		}
+	}
+}
+
+// handleTimeout handles a specific timeout
+func (c *HermesClient) handleTimeout(messageID string) {
+	c.mutex.Lock()
+	if pending, exists := c.pending[messageID]; exists {
+		delete(c.pending, messageID)
+		c.stats.RequestsTimeout++
+		
+		select {
+		case pending.Error <- fmt.Errorf("request timeout"):
+		default:
+		}
+		if pending.Response != nil {
+			close(pending.Response)
+		}
+		if pending.Error != nil {
+			close(pending.Error)
+		}
+	}
+	c.mutex.Unlock()
+}
+
+// errorHandler handles errors from errorsCh
+func (c *HermesClient) errorHandler() {
+	c.logger.Info().Msg("Starting client error handler")
+	defer c.logger.Info().Msg("Client error handler stopped")
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-c.shutdownCh:
+			return
+		case err := <-c.errorsCh:
+			if c.isConnectionError(err) {
+				c.logger.Warn().Err(err).Msg("Client connection error - triggering reconnection")
+				select {
+				case c.reconnectCh <- struct{}{}:
+				default:
+				}
+			} else {
+				c.logger.Error().Err(err).Msg("Client error")
+			}
+		}
+	}
+}
+
+// reconnectManager handles reconnection requests from reconnectCh
+func (c *HermesClient) reconnectManager() {
+	c.logger.Info().Msg("Starting client reconnection manager")
+	defer c.logger.Info().Msg("Client reconnection manager stopped")
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-c.shutdownCh:
+			return
+		case <-c.reconnectCh:
+			c.attemptReconnection()
+		}
+	}
 }

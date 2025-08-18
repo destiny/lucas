@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,7 +59,7 @@ type BrokerPendingRequest struct {
 	Timestamp time.Time
 }
 
-// Broker implements the Hermes Majordomo Protocol broker
+// Broker implements the Hermes Majordomo Protocol broker with channel-based architecture
 type Broker struct {
 	address       string
 	socket        zmq4.Socket
@@ -72,9 +73,36 @@ type Broker struct {
 	stats         *BrokerStats
 	mutex         sync.RWMutex
 	brokerService interface{} // Reference to gateway broker service for immediate device requests
+	
+	// Channel-based architecture
+	messagesCh      chan zmq4.Msg           // Incoming messages from clients/workers
+	workerEventsCh  chan *WorkerEvent       // Worker lifecycle events
+	clientEventsCh  chan *ClientEvent       // Client request events
+	heartbeatCh     chan time.Time          // Heartbeat events
+	shutdownCh      chan struct{}           // Shutdown signal
+	errorsCh        chan error              // Error notifications
 }
 
-// NewBroker creates a new Hermes broker
+// WorkerEvent represents a worker lifecycle event
+type WorkerEvent struct {
+	Type     string // "ready", "reply", "heartbeat", "disconnect"
+	WorkerID string
+	Service  string
+	ClientID string
+	Body     []byte
+	ExtraParts [][]byte
+}
+
+// ClientEvent represents a client request event
+type ClientEvent struct {
+	Type     string // "request"
+	ClientID string
+	Service  string
+	MessageID string
+	Body     []byte
+}
+
+// NewBroker creates a new Hermes broker with channel-based architecture
 func NewBroker(address string) *Broker {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -83,13 +111,20 @@ func NewBroker(address string) *Broker {
 		services:  make(map[string]*BrokerService),
 		workers:   make(map[string]*BrokerWorker),
 		clients:   make(map[string]time.Time),
-		heartbeat: 45 * time.Second, // Default heartbeat interval for internet reliability
+		heartbeat: GetMDPHeartbeatExpiry(), // Use RFC 7/MDP standard expiry (7.5s)
 		ctx:       ctx,
 		cancel:    cancel,
 		logger:    logger.New(),
 		stats: &BrokerStats{
 			StartTime: time.Now(),
 		},
+		// Initialize channels
+		messagesCh:      make(chan zmq4.Msg, 200),        // High capacity for broker throughput
+		workerEventsCh:  make(chan *WorkerEvent, 100),    // Buffered worker events
+		clientEventsCh:  make(chan *ClientEvent, 100),    // Buffered client events
+		heartbeatCh:     make(chan time.Time, 10),        // Buffered heartbeat events
+		shutdownCh:      make(chan struct{}, 1),          // Single shutdown signal
+		errorsCh:        make(chan error, 50),            // Buffered error notifications
 	}
 }
 
@@ -100,11 +135,11 @@ func (b *Broker) SetBrokerService(brokerService interface{}) {
 	b.brokerService = brokerService
 }
 
-// Start starts the broker
+// Start starts the broker with channel-based architecture
 func (b *Broker) Start() error {
 	b.logger.Info().
 		Str("address", b.address).
-		Msg("Starting Hermes broker")
+		Msg("Starting Hermes broker with channel-based architecture")
 
 	// Create ROUTER socket
 	socket := zmq4.NewRouter(b.ctx)
@@ -123,18 +158,26 @@ func (b *Broker) Start() error {
 
 	b.logger.Info().Msg("Hermes broker started successfully")
 
-	// Start message processing loop
-	go b.messageLoop()
-
-	// Start heartbeat monitor
-	go b.heartbeatLoop()
+	// Start channel-based workers
+	go b.socketReader()        // Read from socket and feed messagesCh
+	go b.messageRouter()       // Route messages to appropriate event channels
+	go b.workerEventHandler()  // Handle worker events
+	go b.clientEventHandler()  // Handle client events
+	go b.heartbeatManager()    // Manage heartbeats using heartbeatCh
+	go b.errorHandler()        // Handle errors from errorsCh
 
 	return nil
 }
 
-// Stop stops the broker
+// Stop stops the broker and closes all channels
 func (b *Broker) Stop() error {
 	b.logger.Info().Msg("Stopping Hermes broker")
+
+	// Signal shutdown to all channel workers
+	select {
+	case b.shutdownCh <- struct{}{}:
+	default:
+	}
 
 	b.cancel()
 
@@ -149,66 +192,6 @@ func (b *Broker) Stop() error {
 	return nil
 }
 
-// messageLoop processes incoming messages
-func (b *Broker) messageLoop() {
-	b.logger.Info().Msg("Starting Hermes broker message loop")
-
-	for {
-		select {
-		case <-b.ctx.Done():
-			b.logger.Info().Msg("Hermes broker message loop stopping")
-			return
-		default:
-			// Receive multipart message
-			rawMsg, err := b.socket.Recv()
-			if err != nil {
-				if err.Error() != "resource temporarily unavailable" {
-					b.logger.Error().Err(err).Msg("Failed to receive message")
-				}
-				time.Sleep(10 * time.Millisecond) // Small sleep to prevent busy waiting
-				continue
-			}
-			
-			// Convert message to bytes
-			msg := make([][]byte, len(rawMsg.Frames))
-			for i, frame := range rawMsg.Frames {
-				msg[i] = frame
-			}
-
-			if len(msg) < 3 {
-				b.logger.Warn().
-					Int("parts_count", len(msg)).
-					Msg("Received malformed message (insufficient parts)")
-				continue
-			}
-
-			sender := string(msg[0])
-			empty := msg[1]  // Should be empty frame
-			header := msg[2] // Protocol header
-
-			if len(empty) != 0 {
-				b.logger.Warn().
-					Str("sender", sender).
-					Msg("Received message without empty delimiter")
-				continue
-			}
-
-			b.logger.Debug().
-				Str("sender", sender).
-				Int("parts_count", len(msg)).
-				Str("header_preview", string(header[:min(50, len(header))])+"...").
-				Msg("Received message")
-
-			// Route message based on sender type and content
-			if err := b.routeMessage(sender, msg[2:]); err != nil {
-				b.logger.Error().
-					Str("sender", sender).
-					Err(err).
-					Msg("Failed to route message")
-			}
-		}
-	}
-}
 
 // routeMessage routes a message to the appropriate handler
 func (b *Broker) routeMessage(sender string, msgParts [][]byte) error {
@@ -722,25 +705,6 @@ func (b *Broker) sendToClient(clientID string, body []byte) error {
 	return nil
 }
 
-// heartbeatLoop manages worker heartbeats and cleanup
-func (b *Broker) heartbeatLoop() {
-	ticker := time.NewTicker(b.heartbeat)
-	defer ticker.Stop()
-
-	b.logger.Info().
-		Dur("interval", b.heartbeat).
-		Msg("Starting Hermes broker heartbeat loop")
-
-	for {
-		select {
-		case <-ticker.C:
-			b.checkWorkerLiveness()
-		case <-b.ctx.Done():
-			b.logger.Info().Msg("Hermes broker heartbeat loop stopping")
-			return
-		}
-	}
-}
 
 // checkWorkerLiveness checks and removes expired workers
 func (b *Broker) checkWorkerLiveness() {
@@ -923,4 +887,285 @@ func (b *Broker) sendImmediateDeviceListRequest(hubID string) {
 	b.logger.Info().
 		Str("hub_id", hubID).
 		Msg("Immediate device list request sent successfully")
+}
+
+// isTemporaryError checks if an error is temporary and expected
+func (b *Broker) isTemporaryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	
+	errStr := err.Error()
+	return errStr == "resource temporarily unavailable" ||
+		   errStr == "no message available" ||
+		   errStr == "operation would block"
+}
+
+// isConnectionError checks if an error indicates a connection problem
+func (b *Broker) isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	
+	errStr := err.Error()
+	return strings.Contains(errStr, "connection") ||
+		   strings.Contains(errStr, "network") ||
+		   strings.Contains(errStr, "broken pipe") ||
+		   strings.Contains(errStr, "socket") ||
+		   strings.Contains(errStr, "peer") ||
+		   strings.Contains(errStr, "closed") ||
+		   strings.Contains(errStr, "reset")
+}
+
+// Channel-based Broker Methods
+
+// socketReader reads messages from socket and feeds them to messagesCh
+func (b *Broker) socketReader() {
+	b.logger.Info().Msg("Starting broker socket reader")
+	defer b.logger.Info().Msg("Broker socket reader stopped")
+
+	for {
+		select {
+		case <-b.ctx.Done():
+			return
+		case <-b.shutdownCh:
+			return
+		default:
+			// Receive multipart message
+			rawMsg, err := b.socket.Recv()
+			if err != nil {
+				if b.isTemporaryError(err) {
+					time.Sleep(10 * time.Millisecond)
+					continue
+				}
+				
+				// Send error to error handler
+				select {
+				case b.errorsCh <- err:
+				default:
+				}
+				continue
+			}
+			
+			// Send message to router
+			select {
+			case b.messagesCh <- rawMsg:
+			case <-b.ctx.Done():
+				return
+			case <-b.shutdownCh:
+				return
+			default:
+				b.logger.Warn().Msg("Message channel full, dropping message")
+			}
+		}
+	}
+}
+
+// messageRouter routes messages to appropriate event channels
+func (b *Broker) messageRouter() {
+	b.logger.Info().Msg("Starting broker message router")
+	defer b.logger.Info().Msg("Broker message router stopped")
+
+	for {
+		select {
+		case <-b.ctx.Done():
+			return
+		case <-b.shutdownCh:
+			return
+		case rawMsg := <-b.messagesCh:
+			if err := b.routeMessageToChannels(rawMsg); err != nil {
+				select {
+				case b.errorsCh <- err:
+				default:
+				}
+			}
+		}
+	}
+}
+
+// routeMessageToChannels routes a message to the appropriate handler channel
+func (b *Broker) routeMessageToChannels(rawMsg zmq4.Msg) error {
+	// Convert message to bytes
+	msg := make([][]byte, len(rawMsg.Frames))
+	for i, frame := range rawMsg.Frames {
+		msg[i] = frame
+	}
+
+	if len(msg) < 3 {
+		return fmt.Errorf("received malformed message (insufficient parts): %d", len(msg))
+	}
+
+	sender := string(msg[0])
+	empty := msg[1]  // Should be empty frame
+
+	if len(empty) != 0 {
+		return fmt.Errorf("received message without empty delimiter from %s", sender)
+	}
+
+	b.logger.Debug().
+		Str("sender", sender).
+		Int("parts_count", len(msg)).
+		Msg("Routing message")
+
+	// Try to parse as worker message first
+	var workerMsg WorkerMessage
+	if err := json.Unmarshal(msg[2], &workerMsg); err == nil && workerMsg.Protocol == HERMES_WORKER {
+		event := &WorkerEvent{
+			Type:     workerMsg.Command,
+			WorkerID: sender,
+			Service:  workerMsg.Service,
+			ClientID: workerMsg.ClientID,
+			Body:     workerMsg.Body,
+		}
+		if len(msg) > 3 {
+			event.ExtraParts = msg[3:]
+		}
+		
+		select {
+		case b.workerEventsCh <- event:
+		default:
+			return fmt.Errorf("worker event channel full")
+		}
+		return nil
+	}
+
+	// Try to parse as client message
+	var clientMsg ClientMessage
+	if err := json.Unmarshal(msg[2], &clientMsg); err == nil && clientMsg.Protocol == HERMES_CLIENT {
+		event := &ClientEvent{
+			Type:      clientMsg.Command,
+			ClientID:  sender,
+			Service:   clientMsg.Service,
+			MessageID: clientMsg.MessageID,
+			Body:      clientMsg.Body,
+		}
+		
+		select {
+		case b.clientEventsCh <- event:
+		default:
+			return fmt.Errorf("client event channel full")
+		}
+		return nil
+	}
+
+	return fmt.Errorf("unknown message format from %s", sender)
+}
+
+// workerEventHandler handles worker events from workerEventsCh
+func (b *Broker) workerEventHandler() {
+	b.logger.Info().Msg("Starting broker worker event handler")
+	defer b.logger.Info().Msg("Broker worker event handler stopped")
+
+	for {
+		select {
+		case <-b.ctx.Done():
+			return
+		case <-b.shutdownCh:
+			return
+		case event := <-b.workerEventsCh:
+			if err := b.processWorkerEvent(event); err != nil {
+				select {
+				case b.errorsCh <- err:
+				default:
+				}
+			}
+		}
+	}
+}
+
+// processWorkerEvent processes a single worker event
+func (b *Broker) processWorkerEvent(event *WorkerEvent) error {
+	switch event.Type {
+	case HERMES_READY:
+		return b.handleWorkerReady(event.WorkerID, event.Service)
+	case HERMES_REPLY:
+		return b.handleWorkerReply(event.WorkerID, event.ClientID, event.Body)
+	case HERMES_HEARTBEAT:
+		return b.handleWorkerHeartbeat(event.WorkerID)
+	case HERMES_DISCONNECT:
+		return b.handleWorkerDisconnect(event.WorkerID)
+	default:
+		return fmt.Errorf("unknown worker event type: %s", event.Type)
+	}
+}
+
+// clientEventHandler handles client events from clientEventsCh
+func (b *Broker) clientEventHandler() {
+	b.logger.Info().Msg("Starting broker client event handler")
+	defer b.logger.Info().Msg("Broker client event handler stopped")
+
+	for {
+		select {
+		case <-b.ctx.Done():
+			return
+		case <-b.shutdownCh:
+			return
+		case event := <-b.clientEventsCh:
+			if err := b.processClientEvent(event); err != nil {
+				select {
+				case b.errorsCh <- err:
+				default:
+				}
+			}
+		}
+	}
+}
+
+// processClientEvent processes a single client event
+func (b *Broker) processClientEvent(event *ClientEvent) error {
+	switch event.Type {
+	case HERMES_REQ:
+		msg := &ClientMessage{
+			Protocol:  HERMES_CLIENT,
+			Command:   event.Type,
+			Service:   event.Service,
+			MessageID: event.MessageID,
+			Body:      event.Body,
+		}
+		return b.handleClientMessage(event.ClientID, msg)
+	default:
+		return fmt.Errorf("unknown client event type: %s", event.Type)
+	}
+}
+
+// heartbeatManager manages heartbeat timing using channels
+func (b *Broker) heartbeatManager() {
+	b.logger.Info().Msg("Starting broker heartbeat manager")
+	defer b.logger.Info().Msg("Broker heartbeat manager stopped")
+
+	ticker := time.NewTicker(b.heartbeat)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-b.ctx.Done():
+			return
+		case <-b.shutdownCh:
+			return
+		case t := <-ticker.C:
+			b.heartbeatCh <- t
+			b.checkWorkerLiveness()
+		}
+	}
+}
+
+// errorHandler handles errors from errorsCh
+func (b *Broker) errorHandler() {
+	b.logger.Info().Msg("Starting broker error handler")
+	defer b.logger.Info().Msg("Broker error handler stopped")
+
+	for {
+		select {
+		case <-b.ctx.Done():
+			return
+		case <-b.shutdownCh:
+			return
+		case err := <-b.errorsCh:
+			if b.isConnectionError(err) {
+				b.logger.Warn().Err(err).Msg("Broker socket error - monitoring for recovery")
+			} else {
+				b.logger.Error().Err(err).Msg("Broker error")
+			}
+		}
+	}
 }
