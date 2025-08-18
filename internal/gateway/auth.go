@@ -17,8 +17,10 @@ package gateway
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -121,50 +123,79 @@ func (p *PasswordService) HashPassword(password string) (string, error) {
 	// Generate the hash
 	hash := argon2.IDKey([]byte(password), salt, p.iterations, p.memory, p.parallelism, p.keyLength)
 
-	// Encode the parameters and hash as a string
-	// Format: $argon2id$v=19$m=65536,t=3,p=2$salt$hash
-	encoded := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%x$%x",
-		argon2.Version, p.memory, p.iterations, p.parallelism, salt, hash)
+	// Encode the parameters and hash as a string using Base64
+	// Format: $argon2id$v=19$m=65536,t=3,p=2$base64salt$base64hash
+	saltEncoded := base64.StdEncoding.EncodeToString(salt)
+	hashEncoded := base64.StdEncoding.EncodeToString(hash)
+	
+	encoded := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
+		argon2.Version, p.memory, p.iterations, p.parallelism, saltEncoded, hashEncoded)
 
 	return encoded, nil
 }
 
 // VerifyPassword verifies a password against an Argon2 hash
 func (p *PasswordService) VerifyPassword(password, hashedPassword string) (bool, error) {
-	// Parse the encoded hash
+	// Parse the encoded hash to extract parameters
 	memory, iterations, parallelism, salt, hash, err := p.parseHash(hashedPassword)
 	if err != nil {
 		return false, fmt.Errorf("failed to parse hash: %w", err)
 	}
 
-	// Hash the input password with the same parameters
-	inputHash := argon2.IDKey([]byte(password), salt, iterations, memory, parallelism, p.keyLength)
-
-	// Compare the hashes
-	if len(hash) != len(inputHash) {
+	// Generate hash using the same parameters and compare
+	candidateHash := argon2.IDKey([]byte(password), salt, iterations, memory, parallelism, p.keyLength)
+	
+	// Direct comparison - Argon2 output is deterministic for same inputs
+	if len(hash) != len(candidateHash) {
 		return false, nil
 	}
-
-	for i := 0; i < len(hash); i++ {
-		if hash[i] != inputHash[i] {
+	
+	// Use byte-by-byte comparison (can also use bytes.Equal for simplicity)
+	for i := range hash {
+		if hash[i] != candidateHash[i] {
 			return false, nil
 		}
 	}
-
+	
 	return true, nil
 }
 
 // parseHash parses an encoded Argon2 hash string
 func (p *PasswordService) parseHash(encodedHash string) (memory uint32, iterations uint32, parallelism uint8, salt, hash []byte, err error) {
+	// Split the hash into parts
+	parts := strings.Split(encodedHash, "$")
+	if len(parts) != 6 {
+		return 0, 0, 0, nil, nil, fmt.Errorf("invalid hash format: expected 6 parts, got %d", len(parts))
+	}
+
+	if parts[1] != "argon2id" {
+		return 0, 0, 0, nil, nil, fmt.Errorf("unsupported hash type: %s", parts[1])
+	}
+
+	// Parse version
 	var version int
-	n, err := fmt.Sscanf(encodedHash, "$argon2id$v=%d$m=%d,t=%d,p=%d$%x$%x",
-		&version, &memory, &iterations, &parallelism, &salt, &hash)
-	if err != nil || n != 6 {
-		return 0, 0, 0, nil, nil, fmt.Errorf("invalid hash format")
+	if n, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil || n != 1 {
+		return 0, 0, 0, nil, nil, fmt.Errorf("invalid version format")
 	}
 
 	if version != argon2.Version {
-		return 0, 0, 0, nil, nil, fmt.Errorf("incompatible version")
+		return 0, 0, 0, nil, nil, fmt.Errorf("incompatible version: %d", version)
+	}
+
+	// Parse memory, iterations, and parallelism
+	if n, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &iterations, &parallelism); err != nil || n != 3 {
+		return 0, 0, 0, nil, nil, fmt.Errorf("invalid parameters format")
+	}
+
+	// Decode salt and hash using Base64
+	salt, err = base64.StdEncoding.DecodeString(parts[4])
+	if err != nil {
+		return 0, 0, 0, nil, nil, fmt.Errorf("failed to decode salt: %w", err)
+	}
+
+	hash, err = base64.StdEncoding.DecodeString(parts[5])
+	if err != nil {
+		return 0, 0, 0, nil, nil, fmt.Errorf("failed to decode hash: %w", err)
 	}
 
 	return memory, iterations, parallelism, salt, hash, nil

@@ -476,19 +476,34 @@ func registerWithGateway(cmd *cobra.Command) error {
 		return fmt.Errorf("hub keys not found, run 'lucas hub init' first")
 	}
 
-	// Determine gateway URL
-	gatewayURL := hubGatewayURL
-	if gatewayURL == "" && config.HasValidGatewayKey() {
-		// Try to derive API URL from ZMQ endpoint
-		zmqEndpoint := config.Gateway.Endpoint
-		if strings.Contains(zmqEndpoint, ":5555") {
-			gatewayURL = strings.Replace(zmqEndpoint, ":5555", ":8080", 1)
-			gatewayURL = strings.Replace(gatewayURL, "tcp://", "http://", 1)
+	// Determine gateway URL using smart discovery
+	var gatewayURL string
+	
+	if hubGatewayURL != "" {
+		// Use explicitly provided URL
+		gatewayURL = hubGatewayURL
+	} else {
+		// Try to use configured HTTP endpoint or smart discovery
+		discovery := hub.NewGatewayDiscovery()
+		gatewayInfo, err := discovery.DiscoverHTTPFromConfig(config)
+		if err == nil {
+			gatewayURL = gatewayInfo.APIEndpoint
+			cmd.Printf("✓ Discovered gateway URL: %s\n", gatewayURL)
+		} else {
+			// Fallback to deriving from ZMQ endpoint
+			if config.HasValidGatewayKey() {
+				zmqEndpoint := config.Gateway.Endpoint
+				if strings.Contains(zmqEndpoint, ":5555") {
+					gatewayURL = strings.Replace(zmqEndpoint, ":5555", ":8080", 1)
+					gatewayURL = strings.Replace(gatewayURL, "tcp://", "http://", 1)
+					cmd.Printf("✓ Derived gateway URL from ZMQ endpoint: %s\n", gatewayURL)
+				}
+			}
 		}
 	}
 
 	if gatewayURL == "" {
-		return fmt.Errorf("gateway URL not specified, use --gateway-url flag")
+		return fmt.Errorf("gateway URL not available - use --gateway-url flag or configure http_endpoint in config")
 	}
 
 	cmd.Printf("Registering with gateway at %s...\n", gatewayURL)

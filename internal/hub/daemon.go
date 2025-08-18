@@ -104,25 +104,59 @@ func (d *Daemon) needsRegistration() bool {
 		d.config.Gateway.PublicKey == "gateway_public_key_here"
 }
 
-// autoRegister performs automatic registration with gateway using default locations
+// autoRegister performs automatic registration with gateway using configured endpoint or discovery
 func (d *Daemon) autoRegister() error {
 	d.logger.Info().Msg("Gateway not registered, performing auto-registration...")
 
-	// Try common gateway URLs
+	discovery := NewGatewayDiscovery()
+	
+	// First try using configured HTTP endpoint or smart discovery
+	gatewayInfo, err := discovery.DiscoverHTTPFromConfig(d.config)
+	if err == nil {
+		d.logger.Info().
+			Str("gateway_url", gatewayInfo.APIEndpoint).
+			Msg("Found gateway using configured endpoint or smart discovery")
+
+		// Perform registration
+		err = discovery.RegisterWithGateway(
+			gatewayInfo.APIEndpoint,
+			d.config.Hub.ID,
+			d.config.Hub.PublicKey,
+			d.config.Hub.ProductKey,
+		)
+		if err == nil {
+			// Update config with gateway information
+			d.config.UpdateGatewayInfo(gatewayInfo.ZMQEndpoint, gatewayInfo.PublicKey)
+			
+			// Save updated config
+			if saveErr := d.config.Save(d.configPath); saveErr != nil {
+				d.logger.Warn().Err(saveErr).Msg("Failed to save updated config")
+			}
+
+			d.logger.Info().
+				Str("gateway_url", gatewayInfo.APIEndpoint).
+				Str("zmq_endpoint", gatewayInfo.ZMQEndpoint).
+				Msg("Successfully registered with gateway")
+			return nil
+		}
+		d.logger.Warn().Err(err).Msg("Registration failed with discovered gateway")
+	} else {
+		d.logger.Debug().Err(err).Msg("Gateway discovery failed, trying fallback URLs")
+	}
+
+	// Fallback to common gateway URLs if discovery failed
 	gatewayURLs := []string{
 		"http://localhost:8080",
-		"http://127.0.0.1:8080",
+		"http://127.0.0.1:8080", 
 		"http://gateway:8080",
 		"http://gateway.local:8080",
 	}
 
-	discovery := NewGatewayDiscovery()
 	var lastErr error
-
 	for _, gatewayURL := range gatewayURLs {
 		d.logger.Debug().
 			Str("gateway_url", gatewayURL).
-			Msg("Attempting auto-registration with gateway")
+			Msg("Attempting auto-registration with fallback gateway")
 
 		// Try to get gateway info first to verify it's reachable
 		gatewayInfo, err := discovery.GetGatewayInfo(gatewayURL)

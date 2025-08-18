@@ -351,13 +351,21 @@ var gatewayInitCmd = &cobra.Command{
 		}
 		defer database.Close()
 
-		// Create default user
-		defaultUser, err := database.CreateUser("admin", "admin@example.com")
+		// Create default user with password
+		passwordService := gateway.NewPasswordService()
+		defaultPassword := "admin123" // Default password
+		hashedPassword, err := passwordService.HashPassword(defaultPassword)
 		if err != nil {
-			// User might already exist
-			cmd.Printf("⚠ Default user creation: %v\n", err)
+			cmd.Printf("⚠ Failed to hash default password: %v\n", err)
 		} else {
-			cmd.Printf("✓ Default user created: %s (API Key: %s)\n", defaultUser.Username, defaultUser.APIKey)
+			defaultUser, err := database.CreateUserWithPassword("admin", "admin@example.com", hashedPassword)
+			if err != nil {
+				// User might already exist
+				cmd.Printf("⚠ Default user creation: %v\n", err)
+			} else {
+				cmd.Printf("✓ Default user created: %s (API Key: %s)\n", defaultUser.Username, defaultUser.APIKey)
+				cmd.Printf("✓ Default password: %s (change after first login)\n", defaultPassword)
+			}
 		}
 
 		cmd.Printf("\n✅ Gateway initialization complete!\n")
