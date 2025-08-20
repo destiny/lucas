@@ -205,8 +205,9 @@ func (w *HermesWorker) connect() error {
 			time.Sleep(delay)
 		}
 
-		// Create DEALER socket
-		socket := zmq4.NewDealer(w.ctx)
+		// Create DEALER socket with consistent identity
+		socket := zmq4.NewDealer(w.ctx, zmq4.WithID(zmq4.SocketIdentity(w.identity)))
+		w.logger.Debug().Str("identity", w.identity).Msg("Created worker socket with identity")
 
 		// Set high watermark option if available
 		if err := socket.SetOption(zmq4.OptionHWM, 1000); err != nil {

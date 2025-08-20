@@ -205,8 +205,9 @@ func (c *HermesClient) connect() error {
 			time.Sleep(delay)
 		}
 
-		// Create DEALER socket for asynchronous request-response
-		socket := zmq4.NewDealer(c.ctx)
+		// Create DEALER socket for asynchronous request-response with consistent identity
+		socket := zmq4.NewDealer(c.ctx, zmq4.WithID(zmq4.SocketIdentity(c.identity)))
+		c.logger.Debug().Str("identity", c.identity).Msg("Created client socket with identity")
 
 		// Set high watermark option if available
 		if err := socket.SetOption(zmq4.OptionHWM, 1000); err != nil {

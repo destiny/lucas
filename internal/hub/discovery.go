@@ -208,15 +208,24 @@ func (gd *GatewayDiscovery) TestGatewayConnection(gatewayURL string) error {
 
 // DiscoverHTTPFromConfig attempts to discover the HTTP endpoint using config's smart conversion
 func (gd *GatewayDiscovery) DiscoverHTTPFromConfig(config *Config) (*GatewayInfo, error) {
-	// First try the configured HTTP endpoint or derive from ZMQ
+	// Check if user explicitly configured HTTP endpoint
+	if config.Gateway.HTTPEndpoint != "" {
+		// User explicitly configured - ONLY try this endpoint, no fallbacks
+		info, err := gd.CheckGateway(config.Gateway.HTTPEndpoint)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to configured HTTP endpoint %s: %w", 
+				config.Gateway.HTTPEndpoint, err)
+		}
+		return info, nil
+	}
+	
+	// No explicit HTTP endpoint config - try auto-derivation from ZMQ endpoint
 	httpEndpoint := config.GetHTTPEndpoint()
 	
 	info, err := gd.CheckGateway(httpEndpoint)
 	if err == nil {
 		// Success! Save the discovered endpoint to config
-		if config.Gateway.HTTPEndpoint == "" {
-			config.SetHTTPEndpoint(httpEndpoint)
-		}
+		config.SetHTTPEndpoint(httpEndpoint)
 		return info, nil
 	}
 	

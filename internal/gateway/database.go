@@ -408,12 +408,18 @@ func (d *Database) RegisterHub(hubID, publicKey, name, productKey string) (*Hub,
 	}
 
 	// Check if hub already exists
-	_, err := d.GetHubByHubID(hubID)
+	existingHub, err := d.GetHubByHubID(hubID)
 	if err == nil {
-		// Hub exists, update all registration fields (handles race condition with EnsureHubExists)
-		query := `UPDATE hubs SET public_key = ?, name = ?, product_key = ?, status = 'offline', last_seen = CURRENT_TIMESTAMP 
+		// Hub exists - validate that public key matches for security
+		if existingHub.PublicKey != publicKey {
+			return nil, fmt.Errorf("hub '%s' already registered with different public key - registration rejected for security", hubID)
+		}
+		
+		// Public key matches - this is a legitimate re-registration
+		// Update name, product_key, and status but keep the same public key
+		query := `UPDATE hubs SET name = ?, product_key = ?, status = 'offline', last_seen = CURRENT_TIMESTAMP 
 				  WHERE hub_id = ?`
-		_, err := d.db.Exec(query, publicKey, name, productKey, hubID)
+		_, err := d.db.Exec(query, name, productKey, hubID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update existing hub: %w", err)
 		}
